@@ -20,9 +20,12 @@ class DiffError(Exception):
     pass
 
 
-# .sandkeep/ holds the contract + agent notes; it is the return channel,
-# never part of the change itself
-_EXCLUDE_PATHSPEC = ":(exclude).sandkeep"
+# .sandkeep/ holds the contract + agent notes + authored skills; it is the
+# return/metadata channel, never part of the change itself. .claude/skills/ is
+# where sandkeep injects stored skills (Phase 4) — also sandkeep-managed, so it
+# is kept out of the returned patch. TODO(phase-4): let a repo opt to manage its
+# own .claude/skills/ when it isn't a sandkeep injection target.
+_EXCLUDE_PATHSPECS = [":(exclude).sandkeep", ":(exclude).claude/skills"]
 
 
 def extract_patch(
@@ -37,7 +40,7 @@ def extract_patch(
     and write the patch to outputs/<task_id>.patch on the host."""
     add = provider.exec(
         handle,
-        ["git", "-C", handle.workdir, "add", "-A", "--", ".", _EXCLUDE_PATHSPEC],
+        ["git", "-C", handle.workdir, "add", "-A", "--", ".", *_EXCLUDE_PATHSPECS],
         timeout=exec_timeout,
     )
     if add.exit_code != 0:
@@ -45,7 +48,7 @@ def extract_patch(
     diff = provider.exec(
         handle,
         ["git", "-C", handle.workdir, "diff", "--cached", "--patch", "--binary",
-         task.base_ref, "--", ".", _EXCLUDE_PATHSPEC],
+         task.base_ref, "--", ".", *_EXCLUDE_PATHSPECS],
         timeout=exec_timeout,
     )
     if diff.exit_code != 0:
