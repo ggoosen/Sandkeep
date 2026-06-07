@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 DEFAULT_MODEL = "claude-sonnet-4-6"
+DEFAULT_AGENT = "claude"
 DEFAULT_MAX_TURNS = 8
 DEFAULT_TASK_TIMEOUT_SECONDS = 1800  # wall-clock cap for the agent run
 DEFAULT_EXEC_TIMEOUT_SECONDS = 120  # cap for individual sandbox exec calls
@@ -26,6 +27,7 @@ class Config:
     home: Path = field(default_factory=_home)
     image: str = DEFAULT_IMAGE
     model: str = DEFAULT_MODEL
+    agent: str = DEFAULT_AGENT
     max_turns: int = DEFAULT_MAX_TURNS
     task_timeout_seconds: int = DEFAULT_TASK_TIMEOUT_SECONDS
     exec_timeout_seconds: int = DEFAULT_EXEC_TIMEOUT_SECONDS
@@ -35,6 +37,7 @@ class Config:
         cfg = cls()
         cfg.image = os.environ.get("SANDKEEP_IMAGE", cfg.image)
         cfg.model = os.environ.get("SANDKEEP_MODEL", cfg.model)
+        cfg.agent = os.environ.get("SANDKEEP_AGENT", cfg.agent)
         if "SANDKEEP_MAX_TURNS" in os.environ:
             cfg.max_turns = int(os.environ["SANDKEEP_MAX_TURNS"])
         if "SANDKEEP_TASK_TIMEOUT" in os.environ:

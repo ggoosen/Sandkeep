@@ -13,8 +13,9 @@ import json
 import os
 import sys
 
+from .agent import UnknownAgent, available_agents, get_driver
 from .audit import AuditLog
-from .config import Config, load_api_key, resource_path, stored_api_key
+from .config import DEFAULT_AGENT, Config, load_api_key, resource_path, stored_api_key
 from .controller import Controller, ControllerError
 from .models import TaskState
 from .sandbox.docker_provider import DockerConfig, DockerProvider, build_image
@@ -47,6 +48,22 @@ def _require_api_key(cfg: Config) -> bool:
         return False
     os.environ["ANTHROPIC_API_KEY"] = key
     return True
+
+
+def _ensure_secret(cfg: Config, driver) -> bool:
+    """Make the selected agent's credential available before a run. Claude
+    keeps its env-or-stored-file resolution; other drivers require their
+    declared secret_env in the environment (BUILD_SPEC §13 first cut;
+    TODO(phase-5): per-agent `sandkeep auth set --agent`)."""
+    if driver.secret_env == "ANTHROPIC_API_KEY":
+        return _require_api_key(cfg)
+    if os.environ.get(driver.secret_env):
+        return True
+    print(
+        f"error: agent '{driver.name}' needs {driver.secret_env} set in your environment",
+        file=sys.stderr,
+    )
+    return False
 
 
 def _mask(key: str) -> str:
@@ -93,13 +110,25 @@ def _cmd_auth(cfg: Config, args: argparse.Namespace) -> int:
 
 
 def _cmd_image_build(cfg: Config, args: argparse.Namespace) -> int:
+    driver = get_driver(args.agent or cfg.agent)
+    if driver.name != DEFAULT_AGENT:
+        # The static sandbox_image/Dockerfile bakes in the default agent only.
+        # TODO(phase-5): template the Dockerfile from driver.install_steps() so
+        # `image build --agent <name>` renders a per-agent image.
+        print(
+            f"error: per-agent image build for '{driver.name}' is not implemented "
+            "yet; only the default 'claude' image builds from sandbox_image/Dockerfile",
+            file=sys.stderr,
+        )
+        return 1
     build_image(resource_path("sandbox_image"), cfg.image)
-    print(f"built {cfg.image}")
+    print(f"built {cfg.image} (agent: {driver.name})")
     return 0
 
 
 def _cmd_run(cfg: Config, args: argparse.Namespace) -> int:
-    if not _require_api_key(cfg):
+    driver = get_driver(args.agent or cfg.agent)
+    if not _ensure_secret(cfg, driver):
         return 2
     print(SECURITY_BANNER, file=sys.stderr)
     # the agent needs egress to api.anthropic.com — gated here on purpose;
@@ -109,6 +138,7 @@ def _cmd_run(cfg: Config, args: argparse.Namespace) -> int:
         args.repo,
         args.task,
         model=args.model,
+        agent=driver.name,
         max_turns=args.max_turns,
     )
     if task.state is TaskState.REVIEW:
@@ -128,7 +158,8 @@ def _cmd_run(cfg: Config, args: argparse.Namespace) -> int:
 
 
 def _cmd_shell(cfg: Config, args: argparse.Namespace) -> int:
-    if not _require_api_key(cfg):
+    driver = get_driver(args.agent or cfg.agent)
+    if not _ensure_secret(cfg, driver):
         return 2
     print(SECURITY_BANNER, file=sys.stderr)
     print("provisioning sandbox — your repo is mounted read-only, work happens "
@@ -137,7 +168,7 @@ def _cmd_shell(cfg: Config, args: argparse.Namespace) -> int:
     # TODO(phase-2): brokering egress proxy)
     controller = _make_controller(cfg, network="egress")
     task = controller.run_interactive(
-        args.repo, model=args.model, seed=args.task,
+        args.repo, model=args.model, agent=driver.name, seed=args.task,
         skip_permissions=args.skip_permissions,
     )
     if task.state is TaskState.REVIEW:
@@ -200,7 +231,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     image = sub.add_parser("image", help="manage the sandbox image")
     image_sub = image.add_subparsers(dest="image_command", required=True)
-    image_sub.add_parser("build", help="build the sandbox image")
+    image_build = image_sub.add_parser("build", help="build the sandbox image")
+    image_build.add_argument(
+        "--agent", default=None,
+        help=f"agent to build the image for (default: {DEFAULT_AGENT}; "
+             f"available: {', '.join(available_agents())})",
+    )
 
     auth = sub.add_parser("auth", help="manage the Anthropic API key")
     auth_sub = auth.add_subparsers(dest="auth_command", required=True)
@@ -212,6 +248,11 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--repo", required=True, help="path to the target git repo")
     run.add_argument("--task", required=True, help="instruction for the agent")
     run.add_argument("--model", default=None)
+    run.add_argument(
+        "--agent", default=None,
+        help=f"agent to run in the sandbox (default: {DEFAULT_AGENT}; "
+             f"available: {', '.join(available_agents())})",
+    )
     run.add_argument("--max-turns", type=int, default=None)
 
     shell = sub.add_parser(
@@ -222,6 +263,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--task", default=None, help="optional seed for the agent's first message"
     )
     shell.add_argument("--model", default=None)
+    shell.add_argument(
+        "--agent", default=None,
+        help=f"agent to run in the sandbox (default: {DEFAULT_AGENT}; "
+             f"available: {', '.join(available_agents())})",
+    )
     shell.add_argument(
         "--no-skip-permissions",
         dest="skip_permissions",
@@ -256,6 +302,9 @@ def main(argv: list[str] | None = None) -> int:
         return handler(cfg, args)
     except TaskNotFound as exc:
         print(f"error: no such task: {exc}", file=sys.stderr)
+        return 1
+    except UnknownAgent as exc:
+        print(f"error: {exc}", file=sys.stderr)
         return 1
     except ControllerError as exc:
         print(f"error: {exc}", file=sys.stderr)
