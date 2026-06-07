@@ -60,6 +60,8 @@ pip install sandkeep                 # or: uvx sandkeep
 sandkeep image build                 # build the sandbox image (Node 22 + claude CLI + git + mise)
 sandkeep auth set                    # store your Anthropic API key (hidden prompt, 0600)
                                      # (or: export ANTHROPIC_API_KEY=sk-ant-... — env always wins)
+sandkeep auth set E2B_API_KEY        # store other keys the same way (e.g. for the E2B backend)
+sandkeep auth status                 # show every stored/active key, masked
 
 # unattended: hand it one task, get back a reviewable diff
 sandkeep run --repo /path/to/repo --task "Add input validation to parse_config()"

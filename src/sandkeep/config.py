@@ -82,9 +82,10 @@ class Config:
 
     @property
     def env_file(self) -> Path:
-        # `sandkeep auth set` stores ANTHROPIC_API_KEY here (0600, env format
-        # so it is also `source`-able). Plaintext on disk — same trust level
-        # as ~/.aws/credentials. TODO(phase-2): secret broker removes this.
+        # `sandkeep auth set [NAME]` stores secrets here (0600, env format so it
+        # is also `source`-able): ANTHROPIC_API_KEY, E2B_API_KEY, and any agent
+        # driver's secret_env. Plaintext on disk — same trust level as
+        # ~/.aws/credentials. TODO(phase-2): secret broker removes this.
         return self.home / "env"
 
     def ensure_dirs(self) -> None:
@@ -93,23 +94,68 @@ class Config:
         self.archive_dir.mkdir(parents=True, exist_ok=True)
 
 
-def stored_api_key(cfg: "Config") -> str | None:
-    """The key from cfg.env_file, if any (no environment fallback)."""
+def stored_secrets(cfg: "Config") -> dict[str, str]:
+    """All NAME=value secrets in cfg.env_file (no environment fallback)."""
+    out: dict[str, str] = {}
     if not cfg.env_file.exists():
-        return None
+        return out
     for line in cfg.env_file.read_text().splitlines():
         line = line.strip()
-        if line.startswith("ANTHROPIC_API_KEY="):
-            value = line.split("=", 1)[1].strip().strip("'\"")
-            if value:
-                return value
-    return None
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        name, value = line.split("=", 1)
+        value = value.strip().strip("'\"")
+        if value:
+            out[name.strip()] = value
+    return out
+
+
+def stored_secret(cfg: "Config", name: str) -> str | None:
+    """One stored secret by name (no environment fallback)."""
+    return stored_secrets(cfg).get(name)
+
+
+def write_secret(cfg: "Config", name: str, value: str) -> None:
+    """Upsert one secret in cfg.env_file, preserving the others, 0600."""
+    secrets = stored_secrets(cfg)
+    secrets[name] = value
+    cfg.home.mkdir(parents=True, exist_ok=True)
+    cfg.env_file.write_text("".join(f"{k}={secrets[k]}\n" for k in sorted(secrets)))
+    cfg.env_file.chmod(0o600)
+
+
+def clear_secret(cfg: "Config", name: str | None = None) -> bool:
+    """Remove one secret (by name) or all (name=None). True if anything removed."""
+    if name is None:
+        if cfg.env_file.exists():
+            cfg.env_file.unlink()
+            return True
+        return False
+    secrets = stored_secrets(cfg)
+    if name not in secrets:
+        return False
+    del secrets[name]
+    if secrets:
+        cfg.env_file.write_text("".join(f"{k}={secrets[k]}\n" for k in sorted(secrets)))
+        cfg.env_file.chmod(0o600)
+    elif cfg.env_file.exists():
+        cfg.env_file.unlink()
+    return True
+
+
+def load_secret(cfg: "Config", name: str) -> str | None:
+    """A secret for a run: the environment wins (an explicit export is never
+    silently overridden), else the value stored by `sandkeep auth set`."""
+    return os.environ.get(name) or stored_secret(cfg, name)
+
+
+# Back-compat aliases (ANTHROPIC_API_KEY was the only key before Phase 2).
+def stored_api_key(cfg: "Config") -> str | None:
+    return stored_secret(cfg, "ANTHROPIC_API_KEY")
 
 
 def load_api_key(cfg: "Config") -> str | None:
-    """ANTHROPIC_API_KEY for a run: the environment wins (an explicit export
-    is never silently overridden), else the key stored by `sandkeep auth set`."""
-    return os.environ.get("ANTHROPIC_API_KEY") or stored_api_key(cfg)
+    return load_secret(cfg, "ANTHROPIC_API_KEY")
 
 
 def resource_path(name: str) -> Path:

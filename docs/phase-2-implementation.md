@@ -146,10 +146,17 @@ The provider is written and wired; what's left is the part that needs an account
    (Name it `sandkeep`, or set `SANDKEEP_E2B_TEMPLATE` to whatever you call it.)
 4. **Install the optional dep** — `pip install 'sandkeep[e2b]'`.
 
+Store the key with the CLI (or just `export E2B_API_KEY=...`):
+
+```bash
+sandkeep auth set E2B_API_KEY        # hidden prompt, stored 0600 alongside the Anthropic key
+sandkeep auth status                 # confirm it's there (masked)
+```
+
 **Then verify — this is the step I can't do without the key:**
 
 ```bash
-export E2B_API_KEY=e2b_...
+export E2B_API_KEY=e2b_...           # the test harness reads it from the env
 # the acceptance gate: run the SAME hostile-agent suite against the microVM
 SANDKEEP_TEST_BACKEND=e2b pytest tests/test_boundary.py -v
 ```

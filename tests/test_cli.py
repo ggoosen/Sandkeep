@@ -191,6 +191,57 @@ def test_env_var_wins_over_stored_key(tmp_path, monkeypatch):
     assert load_api_key(Config.from_env()) == "sk-ant-from-env"
 
 
+def _set_named_key_via_stdin(monkeypatch, name: str, key: str) -> int:
+    import io
+
+    monkeypatch.setattr("sys.stdin", io.StringIO(key + "\n"))
+    return _run_cli("auth", "set", name)
+
+
+def test_auth_manages_multiple_named_keys(tmp_path, monkeypatch):
+    """`auth set E2B_API_KEY` stores alongside the Anthropic key, not over it."""
+    monkeypatch.setenv("SANDKEEP_HOME", str(tmp_path / "skhome"))
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("E2B_API_KEY", raising=False)
+    _set_key_via_stdin(monkeypatch, "sk-ant-abc123456789")
+    _set_named_key_via_stdin(monkeypatch, "E2B_API_KEY", "e2b_secret123456")
+
+    from sandkeep.config import Config, stored_secret, stored_secrets
+
+    cfg = Config.from_env()
+    assert stored_secret(cfg, "ANTHROPIC_API_KEY") == "sk-ant-abc123456789"
+    assert stored_secret(cfg, "E2B_API_KEY") == "e2b_secret123456"
+    assert set(stored_secrets(cfg)) == {"ANTHROPIC_API_KEY", "E2B_API_KEY"}
+    assert oct(cfg.env_file.stat().st_mode & 0o777) == "0o600"
+
+
+def test_auth_clear_by_name_keeps_the_others(tmp_path, monkeypatch):
+    monkeypatch.setenv("SANDKEEP_HOME", str(tmp_path / "skhome"))
+    _set_key_via_stdin(monkeypatch, "sk-ant-abc123456789")
+    _set_named_key_via_stdin(monkeypatch, "E2B_API_KEY", "e2b_secret123456")
+    assert _run_cli("auth", "clear", "E2B_API_KEY") == 0
+
+    from sandkeep.config import Config, stored_secret, stored_secrets
+
+    cfg = Config.from_env()
+    assert stored_secret(cfg, "E2B_API_KEY") is None
+    assert stored_secret(cfg, "ANTHROPIC_API_KEY") == "sk-ant-abc123456789"
+    assert set(stored_secrets(cfg)) == {"ANTHROPIC_API_KEY"}
+
+
+def test_auth_status_shows_e2b_key(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("SANDKEEP_HOME", str(tmp_path / "skhome"))
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("E2B_API_KEY", raising=False)
+    _set_named_key_via_stdin(monkeypatch, "E2B_API_KEY", "e2b_secret123456")
+    capsys.readouterr()
+    assert _run_cli("auth", "status") == 0
+    out = capsys.readouterr().out
+    assert "E2B_API_KEY" in out
+    assert "from stored file" in out
+    assert "e2b_secret123456" not in out  # masked
+
+
 def test_run_uses_stored_key_without_env(
     tmp_path, monkeypatch, sandbox_image, host_repo, capsys
 ):

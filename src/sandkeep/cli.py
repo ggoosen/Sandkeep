@@ -16,7 +16,15 @@ import sys
 from . import skills
 from .agent import UnknownAgent, available_agents, get_driver
 from .audit import AuditLog
-from .config import DEFAULT_AGENT, Config, load_api_key, resource_path, stored_api_key
+from .config import (
+    DEFAULT_AGENT,
+    Config,
+    clear_secret,
+    load_secret,
+    resource_path,
+    stored_secrets,
+    write_secret,
+)
 from .controller import Controller, ControllerError
 from .models import TaskState
 from .sandbox.docker_provider import DockerConfig, DockerProvider, build_image
@@ -47,35 +55,24 @@ def _make_controller(cfg: Config, *, network: str) -> Controller:
     return Controller(cfg, store, audit, provider, network_denied=(network == "none"))
 
 
-def _require_api_key(cfg: Config) -> bool:
-    """Resolve the API key (env wins, else `sandkeep auth set` storage) and
-    export it for the controller. False if none is available."""
-    key = load_api_key(cfg)
-    if not key:
+def _ensure_named_secret(cfg: Config, name: str) -> bool:
+    """Resolve a secret by name (env wins, else `sandkeep auth set` storage) and
+    export it into the environment for the run. False (with a hint) if missing."""
+    value = load_secret(cfg, name)
+    if not value:
         print(
-            "error: no Anthropic API key — run `sandkeep auth set` "
-            "or export ANTHROPIC_API_KEY",
+            f"error: no {name} — run `sandkeep auth set {name}` or export {name}",
             file=sys.stderr,
         )
         return False
-    os.environ["ANTHROPIC_API_KEY"] = key
+    os.environ[name] = value
     return True
 
 
 def _ensure_secret(cfg: Config, driver) -> bool:
-    """Make the selected agent's credential available before a run. Claude
-    keeps its env-or-stored-file resolution; other drivers require their
-    declared secret_env in the environment (BUILD_SPEC §13 first cut;
-    TODO(phase-5): per-agent `sandkeep auth set --agent`)."""
-    if driver.secret_env == "ANTHROPIC_API_KEY":
-        return _require_api_key(cfg)
-    if os.environ.get(driver.secret_env):
-        return True
-    print(
-        f"error: agent '{driver.name}' needs {driver.secret_env} set in your environment",
-        file=sys.stderr,
-    )
-    return False
+    """Make the selected agent's credential available before a run, by the
+    driver's declared secret_env (claude → ANTHROPIC_API_KEY)."""
+    return _ensure_named_secret(cfg, driver.secret_env)
 
 
 def _mask(key: str) -> str:
@@ -121,41 +118,56 @@ def _print_policy(controller: Controller, task) -> None:
             print(f"      {s.name} — {s.description}")
 
 
+# Friendly "that doesn't look right" hints per known key (not enforced).
+_KEY_PREFIX_HINTS = {"ANTHROPIC_API_KEY": "sk-ant-", "E2B_API_KEY": "e2b_"}
+
+
+def _relevant_key_names(cfg: Config) -> list[str]:
+    """Names worth showing in `auth status`: the well-known ones, every agent
+    driver's secret_env, plus anything already stored."""
+    names = {"ANTHROPIC_API_KEY", "E2B_API_KEY"}
+    for agent in available_agents():
+        names.add(get_driver(agent).secret_env)
+    names |= set(stored_secrets(cfg))
+    return sorted(names)
+
+
 def _cmd_auth(cfg: Config, args: argparse.Namespace) -> int:
     if args.auth_command == "set":
+        name = args.name
         if sys.stdin.isatty():
-            key = getpass.getpass("Anthropic API key (input hidden): ").strip()
+            key = getpass.getpass(f"{name} (input hidden): ").strip()
         else:
             key = sys.stdin.readline().strip()  # piped: echo $KEY | sandkeep auth set
         if not key:
             print("error: empty key", file=sys.stderr)
             return 1
-        if not key.startswith("sk-ant-"):
-            print("warning: key does not look like an Anthropic key (sk-ant-…); storing anyway",
+        prefix = _KEY_PREFIX_HINTS.get(name)
+        if prefix and not key.startswith(prefix):
+            print(f"warning: {name} doesn't look like a {prefix}… key; storing anyway",
                   file=sys.stderr)
-        cfg.home.mkdir(parents=True, exist_ok=True)
-        cfg.env_file.write_text(f"ANTHROPIC_API_KEY={key}\n")
-        cfg.env_file.chmod(0o600)
-        print(f"stored {_mask(key)} at {cfg.env_file} (mode 0600)")
-        print("note: plaintext on disk — treat like ~/.aws/credentials. "
-              "An exported ANTHROPIC_API_KEY always takes precedence.")
+        write_secret(cfg, name, key)
+        print(f"stored {name} = {_mask(key)} at {cfg.env_file} (mode 0600)")
+        print(f"note: plaintext on disk — treat like ~/.aws/credentials. "
+              f"An exported {name} always takes precedence.")
         return 0
     if args.auth_command == "status":
-        env_key = os.environ.get("ANTHROPIC_API_KEY")
-        file_key = stored_api_key(cfg)
-        print(f"environment: {_mask(env_key) if env_key else '(not set)'}")
-        print(f"stored file: {_mask(file_key) if file_key else '(none)'}"
-              + (f"  [{cfg.env_file}]" if file_key else ""))
-        effective = env_key or file_key
-        print(f"effective:   {_mask(effective) if effective else 'NO KEY — runs will fail'}"
-              + ("  (from environment)" if env_key else "  (from stored file)" if file_key else ""))
+        stored = stored_secrets(cfg)
+        for name in _relevant_key_names(cfg):
+            env_key = os.environ.get(name)
+            file_key = stored.get(name)
+            effective = env_key or file_key
+            src = ("from environment" if env_key
+                   else "from stored file" if file_key else "MISSING")
+            shown = _mask(effective) if effective else "(not set)"
+            print(f"{name}: {shown}  ({src})")
+        print(f"\nstored file: {cfg.env_file}")
         return 0
     if args.auth_command == "clear":
-        if cfg.env_file.exists():
-            cfg.env_file.unlink()
-            print(f"removed {cfg.env_file}")
+        if clear_secret(cfg, args.name):
+            print(f"removed {args.name or 'all stored keys'}")
         else:
-            print("nothing stored")
+            print("nothing stored" if args.name is None else f"no stored {args.name}")
         return 0
     return 1
 
@@ -180,6 +192,8 @@ def _cmd_image_build(cfg: Config, args: argparse.Namespace) -> int:
 def _cmd_run(cfg: Config, args: argparse.Namespace) -> int:
     driver = get_driver(args.agent or cfg.agent)
     if not _ensure_secret(cfg, driver):
+        return 2
+    if cfg.backend == "e2b" and not _ensure_named_secret(cfg, "E2B_API_KEY"):
         return 2
     print(SECURITY_BANNER, file=sys.stderr)
     # the agent needs egress to api.anthropic.com by default — gated here on
@@ -214,6 +228,8 @@ def _cmd_run(cfg: Config, args: argparse.Namespace) -> int:
 def _cmd_shell(cfg: Config, args: argparse.Namespace) -> int:
     driver = get_driver(args.agent or cfg.agent)
     if not _ensure_secret(cfg, driver):
+        return 2
+    if cfg.backend == "e2b" and not _ensure_named_secret(cfg, "E2B_API_KEY"):
         return 2
     print(SECURITY_BANNER, file=sys.stderr)
     print("provisioning sandbox — your repo is mounted read-only, work happens "
@@ -318,11 +334,18 @@ def build_parser() -> argparse.ArgumentParser:
              f"available: {', '.join(available_agents())})",
     )
 
-    auth = sub.add_parser("auth", help="manage the Anthropic API key")
+    auth = sub.add_parser("auth", help="manage stored API keys (Anthropic, E2B, …)")
     auth_sub = auth.add_subparsers(dest="auth_command", required=True)
-    auth_sub.add_parser("set", help="store the API key (hidden prompt, or piped stdin)")
-    auth_sub.add_parser("status", help="show where the key would come from (masked)")
-    auth_sub.add_parser("clear", help="remove the stored key")
+    auth_set = auth_sub.add_parser(
+        "set", help="store a key (hidden prompt, or piped stdin)")
+    auth_set.add_argument(
+        "name", nargs="?", default="ANTHROPIC_API_KEY",
+        help="which key to store (default: ANTHROPIC_API_KEY; e.g. E2B_API_KEY)")
+    auth_sub.add_parser("status", help="show where each key would come from (masked)")
+    auth_clear = auth_sub.add_parser("clear", help="remove a stored key (or all)")
+    auth_clear.add_argument(
+        "name", nargs="?", default=None,
+        help="which key to remove (default: all stored keys)")
 
     run = sub.add_parser("run", help="run a single governed task")
     run.add_argument("--repo", required=True, help="path to the target git repo")
