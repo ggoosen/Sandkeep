@@ -283,6 +283,9 @@ Rules:
 ## 10. CLI + human gate (`cli.py`) — Phase 1 gate
 
 Commands (see `CLAUDE.md` for usage):
+- `sandkeep auth set|status|clear` — store/inspect/remove the Anthropic API key
+  (`~/.sandkeep/env`, mode 0600, masked output; an exported `ANTHROPIC_API_KEY`
+  always wins). `TODO(phase-2)`: replaced by the secret broker.
 - `sandkeep image build` — build the sandbox image.
 - `sandkeep run --repo <path> --task "<instruction>" [--model ...] [--max-turns N]` — full single-task loop; stops at `REVIEW` and prints the summary + patch path.
 - `sandkeep status <task_id>` / `sandkeep show <task_id>` — state + contract + patch.

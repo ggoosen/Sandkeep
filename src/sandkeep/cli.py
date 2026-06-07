@@ -8,12 +8,13 @@ apply. TODO(phase-2): draft PR instead.
 from __future__ import annotations
 
 import argparse
+import getpass
 import json
 import os
 import sys
 
 from .audit import AuditLog
-from .config import Config, resource_path
+from .config import Config, load_api_key, resource_path, stored_api_key
 from .controller import Controller, ControllerError
 from .models import TaskState
 from .sandbox.docker_provider import DockerConfig, DockerProvider, build_image
@@ -33,6 +34,64 @@ def _make_controller(cfg: Config, *, network: str) -> Controller:
     return Controller(cfg, store, audit, provider, network_denied=(network == "none"))
 
 
+def _require_api_key(cfg: Config) -> bool:
+    """Resolve the API key (env wins, else `sandkeep auth set` storage) and
+    export it for the controller. False if none is available."""
+    key = load_api_key(cfg)
+    if not key:
+        print(
+            "error: no Anthropic API key — run `sandkeep auth set` "
+            "or export ANTHROPIC_API_KEY",
+            file=sys.stderr,
+        )
+        return False
+    os.environ["ANTHROPIC_API_KEY"] = key
+    return True
+
+
+def _mask(key: str) -> str:
+    return f"{key[:7]}…{key[-4:]}" if len(key) > 14 else "…"
+
+
+def _cmd_auth(cfg: Config, args: argparse.Namespace) -> int:
+    if args.auth_command == "set":
+        if sys.stdin.isatty():
+            key = getpass.getpass("Anthropic API key (input hidden): ").strip()
+        else:
+            key = sys.stdin.readline().strip()  # piped: echo $KEY | sandkeep auth set
+        if not key:
+            print("error: empty key", file=sys.stderr)
+            return 1
+        if not key.startswith("sk-ant-"):
+            print("warning: key does not look like an Anthropic key (sk-ant-…); storing anyway",
+                  file=sys.stderr)
+        cfg.home.mkdir(parents=True, exist_ok=True)
+        cfg.env_file.write_text(f"ANTHROPIC_API_KEY={key}\n")
+        cfg.env_file.chmod(0o600)
+        print(f"stored {_mask(key)} at {cfg.env_file} (mode 0600)")
+        print("note: plaintext on disk — treat like ~/.aws/credentials. "
+              "An exported ANTHROPIC_API_KEY always takes precedence.")
+        return 0
+    if args.auth_command == "status":
+        env_key = os.environ.get("ANTHROPIC_API_KEY")
+        file_key = stored_api_key(cfg)
+        print(f"environment: {_mask(env_key) if env_key else '(not set)'}")
+        print(f"stored file: {_mask(file_key) if file_key else '(none)'}"
+              + (f"  [{cfg.env_file}]" if file_key else ""))
+        effective = env_key or file_key
+        print(f"effective:   {_mask(effective) if effective else 'NO KEY — runs will fail'}"
+              + ("  (from environment)" if env_key else "  (from stored file)" if file_key else ""))
+        return 0
+    if args.auth_command == "clear":
+        if cfg.env_file.exists():
+            cfg.env_file.unlink()
+            print(f"removed {cfg.env_file}")
+        else:
+            print("nothing stored")
+        return 0
+    return 1
+
+
 def _cmd_image_build(cfg: Config, args: argparse.Namespace) -> int:
     build_image(resource_path("sandbox_image"), cfg.image)
     print(f"built {cfg.image}")
@@ -40,8 +99,7 @@ def _cmd_image_build(cfg: Config, args: argparse.Namespace) -> int:
 
 
 def _cmd_run(cfg: Config, args: argparse.Namespace) -> int:
-    if not os.environ.get("ANTHROPIC_API_KEY"):
-        print("error: ANTHROPIC_API_KEY is not set", file=sys.stderr)
+    if not _require_api_key(cfg):
         return 2
     print(SECURITY_BANNER, file=sys.stderr)
     # the agent needs egress to api.anthropic.com — gated here on purpose;
@@ -70,8 +128,7 @@ def _cmd_run(cfg: Config, args: argparse.Namespace) -> int:
 
 
 def _cmd_shell(cfg: Config, args: argparse.Namespace) -> int:
-    if not os.environ.get("ANTHROPIC_API_KEY"):
-        print("error: ANTHROPIC_API_KEY is not set", file=sys.stderr)
+    if not _require_api_key(cfg):
         return 2
     print(SECURITY_BANNER, file=sys.stderr)
     print("provisioning sandbox — your repo is mounted read-only, work happens "
@@ -142,6 +199,12 @@ def build_parser() -> argparse.ArgumentParser:
     image_sub = image.add_subparsers(dest="image_command", required=True)
     image_sub.add_parser("build", help="build the sandbox image")
 
+    auth = sub.add_parser("auth", help="manage the Anthropic API key")
+    auth_sub = auth.add_subparsers(dest="auth_command", required=True)
+    auth_sub.add_parser("set", help="store the API key (hidden prompt, or piped stdin)")
+    auth_sub.add_parser("status", help="show where the key would come from (masked)")
+    auth_sub.add_parser("clear", help="remove the stored key")
+
     run = sub.add_parser("run", help="run a single governed task")
     run.add_argument("--repo", required=True, help="path to the target git repo")
     run.add_argument("--task", required=True, help="instruction for the agent")
@@ -170,6 +233,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.command == "image":
             return _cmd_image_build(cfg, args)
+        if args.command == "auth":
+            return _cmd_auth(cfg, args)
         handler = {
             "run": _cmd_run,
             "shell": _cmd_shell,

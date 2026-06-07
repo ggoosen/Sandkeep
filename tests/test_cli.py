@@ -146,7 +146,77 @@ def test_run_requires_api_key(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("SANDKEEP_HOME", str(tmp_path / "skhome"))
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     assert _run_cli("run", "--repo", ".", "--task", "x") == 2
-    assert "ANTHROPIC_API_KEY" in capsys.readouterr().err
+    assert "sandkeep auth set" in capsys.readouterr().err
+
+
+# -- sandkeep auth ----------------------------------------------------------
+
+
+def _set_key_via_stdin(monkeypatch, key: str) -> int:
+    import io
+
+    monkeypatch.setattr("sys.stdin", io.StringIO(key + "\n"))
+    return _run_cli("auth", "set")
+
+
+def test_auth_set_stores_key_0600_and_masks_output(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("SANDKEEP_HOME", str(tmp_path / "skhome"))
+    key = "sk-ant-test-1234567890abcd"
+    assert _set_key_via_stdin(monkeypatch, key) == 0
+    out = capsys.readouterr().out
+    assert key not in out  # never echo the full key
+    env_file = tmp_path / "skhome" / "env"
+    assert env_file.read_text() == f"ANTHROPIC_API_KEY={key}\n"
+    assert oct(env_file.stat().st_mode & 0o777) == "0o600"
+
+
+def test_auth_status_masks_and_names_source(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("SANDKEEP_HOME", str(tmp_path / "skhome"))
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    key = "sk-ant-test-1234567890abcd"
+    _set_key_via_stdin(monkeypatch, key)
+    capsys.readouterr()
+    assert _run_cli("auth", "status") == 0
+    out = capsys.readouterr().out
+    assert key not in out
+    assert "from stored file" in out
+
+
+def test_env_var_wins_over_stored_key(tmp_path, monkeypatch):
+    monkeypatch.setenv("SANDKEEP_HOME", str(tmp_path / "skhome"))
+    _set_key_via_stdin(monkeypatch, "sk-ant-stored")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-from-env")
+    from sandkeep.config import Config, load_api_key
+
+    assert load_api_key(Config.from_env()) == "sk-ant-from-env"
+
+
+def test_run_uses_stored_key_without_env(
+    tmp_path, monkeypatch, sandbox_image, host_repo, capsys
+):
+    """The point of `auth set`: run works with no exported variable."""
+    monkeypatch.setenv("SANDKEEP_HOME", str(tmp_path / "skhome"))
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    _set_key_via_stdin(monkeypatch, "sk-ant-stored-key-000111")
+    _stub_agent(monkeypatch)
+    assert _run_cli("run", "--repo", str(host_repo), "--task", "add validation") == 0
+    task_id = _task_id(capsys)
+    assert _run_cli("reject", task_id) == 0  # cleanup
+
+
+def test_auth_clear_removes_key(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("SANDKEEP_HOME", str(tmp_path / "skhome"))
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    _set_key_via_stdin(monkeypatch, "sk-ant-test-1234567890abcd")
+    assert _run_cli("auth", "clear") == 0
+    assert not (tmp_path / "skhome" / "env").exists()
+    capsys.readouterr()
+    assert _run_cli("run", "--repo", ".", "--task", "x") == 2
+
+
+def test_auth_set_rejects_empty(tmp_path, monkeypatch):
+    monkeypatch.setenv("SANDKEEP_HOME", str(tmp_path / "skhome"))
+    assert _set_key_via_stdin(monkeypatch, "") == 1
 
 
 def test_unknown_task_id_errors(cli_env, capsys):

@@ -58,7 +58,8 @@ changes. **Cordon is the everyday driver; Sandkeep is the vault you escalate to.
 ```bash
 pip install sandkeep                 # or: uvx sandkeep
 sandkeep image build                 # build the sandbox image (Node 22 + claude CLI + git + mise)
-export ANTHROPIC_API_KEY=sk-ant-...
+sandkeep auth set                    # store your Anthropic API key (hidden prompt, 0600)
+                                     # (or: export ANTHROPIC_API_KEY=sk-ant-... — env always wins)
 
 # unattended: hand it one task, get back a reviewable diff
 sandkeep run --repo /path/to/repo --task "Add input validation to parse_config()"

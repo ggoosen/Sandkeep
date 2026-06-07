@@ -58,10 +58,36 @@ class Config:
         # Quarantined sandbox metadata for forensics (BUILD_SPEC §8)
         return self.home / "archive"
 
+    @property
+    def env_file(self) -> Path:
+        # `sandkeep auth set` stores ANTHROPIC_API_KEY here (0600, env format
+        # so it is also `source`-able). Plaintext on disk — same trust level
+        # as ~/.aws/credentials. TODO(phase-2): secret broker removes this.
+        return self.home / "env"
+
     def ensure_dirs(self) -> None:
         self.home.mkdir(parents=True, exist_ok=True)
         self.outputs_dir.mkdir(parents=True, exist_ok=True)
         self.archive_dir.mkdir(parents=True, exist_ok=True)
+
+
+def stored_api_key(cfg: "Config") -> str | None:
+    """The key from cfg.env_file, if any (no environment fallback)."""
+    if not cfg.env_file.exists():
+        return None
+    for line in cfg.env_file.read_text().splitlines():
+        line = line.strip()
+        if line.startswith("ANTHROPIC_API_KEY="):
+            value = line.split("=", 1)[1].strip().strip("'\"")
+            if value:
+                return value
+    return None
+
+
+def load_api_key(cfg: "Config") -> str | None:
+    """ANTHROPIC_API_KEY for a run: the environment wins (an explicit export
+    is never silently overridden), else the key stored by `sandkeep auth set`."""
+    return os.environ.get("ANTHROPIC_API_KEY") or stored_api_key(cfg)
 
 
 def resource_path(name: str) -> Path:

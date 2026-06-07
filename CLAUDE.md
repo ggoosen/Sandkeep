@@ -31,6 +31,9 @@ Do not add a web framework, message queue, or cloud SDK in Phase 0–1. Keep dep
 ## How to run
 
 ```bash
+# store the API key once (hidden prompt; ~/.sandkeep/env, 0600; env var wins)
+sandkeep auth set
+
 # build the sandbox image once
 sandkeep image build
 
