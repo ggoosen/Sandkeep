@@ -152,7 +152,7 @@ def run_agent(
     if result.exit_code == AUTH_ERROR_EXIT:
         detail = AUTH_ERROR_HINT
     elif result.exit_code != 0:
-        detail = f"agent exited {result.exit_code}"
+        detail = _error_detail(output) or f"agent exited {result.exit_code}"
 
     audit.log(
         "agent_finished",
@@ -171,6 +171,23 @@ def run_agent(
         output=output,
         detail=detail,
     )
+
+
+def _error_detail(output: dict | None) -> str:
+    """Surface claude's own error message from --output-format json instead of
+    a bare exit code. The CLI puts a human message in `result` and, on API
+    failures, an `api_error_status` (e.g. 400 'Credit balance is too low')."""
+    if not output:
+        return ""
+    message = str(output.get("result") or "").strip()
+    api_status = output.get("api_error_status")
+    if message and api_status:
+        return f"{message} (api status {api_status})"
+    if message:
+        return message
+    if api_status:
+        return f"agent API error (status {api_status})"
+    return ""
 
 
 def usage_from_output(output: dict | None) -> tuple[int, int]:

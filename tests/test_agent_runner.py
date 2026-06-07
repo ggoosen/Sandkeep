@@ -127,6 +127,19 @@ def test_run_agent_timeout(task, handle, audit):
     assert "timeout" in result.detail
 
 
+def test_run_agent_surfaces_claude_error_message(task, handle, audit):
+    """A nonzero exit with parseable JSON should report claude's own reason
+    (e.g. billing), not a bare 'agent exited 1'."""
+    payload = {
+        "is_error": True,
+        "api_error_status": 400,
+        "result": "Credit balance is too low",
+    }
+    sandbox = FakeSandbox(exit_code=1, stdout=json.dumps(payload))
+    result = run_agent(task, sandbox, handle, audit, trace_id="t1", timeout=60)
+    assert result.detail == "Credit balance is too low (api status 400)"
+
+
 def test_run_agent_tolerates_non_json_output(task, handle, audit):
     sandbox = FakeSandbox(exit_code=1, stdout="not json at all")
     result = run_agent(task, sandbox, handle, audit, trace_id="t1", timeout=60)
