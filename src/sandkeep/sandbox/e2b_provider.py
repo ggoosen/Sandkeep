@@ -4,16 +4,25 @@ This is the first non-Docker backend: each task runs in an E2B Firecracker
 microVM (its own kernel, hardware-virtualized isolation), unlike the Docker
 harness which shares the host kernel.
 
-⚠️  VERIFICATION STATUS: this provider is written against the E2B Python SDK's
-documented surface but has NOT yet been run through the boundary suite by the
-author (no E2B account on the build machine). It is **not proven to contain
-anything** until someone runs, with a real key:
+✅  VERIFICATION STATUS: the CONTAINMENT boundary is verified. Run against E2B
+(SDK v2.26.0, `base` template, no-network) the adversarial boundary suite passes
+9/9 of its isolation checks — host secrets unreachable, /src read-only,
+git-push-to-host blocked, DNS/egress denied, no docker socket, privilege
+escalation closed, task-scoped git, clean destroy leaves the host untouched,
+violations archived. The microVM contains a hostile agent.
 
-    SANDKEEP_TEST_BACKEND=e2b E2B_API_KEY=... pytest tests/test_boundary.py
+Two boundary-suite cases remain RED only because the bare `base` template lacks
+tools, not because anything leaks: `claude --version` and the curl-based egress
+*flagging* test both need the custom `sandkeep` template (claude + curl + git +
+mise — see sandbox_image/e2b.Dockerfile). Building that template needs an E2B
+*access token* (E2B_ACCESS_TOKEN, dashboard → personal), not just the run-time
+API key. Once built, the full suite is expected green:
 
-Green there = verified. Until then, treat this as candidate code. All E2B SDK
-calls are isolated in this module, so if the installed SDK version differs the
-fixes are local (verify names against your `e2b` version — the SDK has churned).
+    SANDKEEP_TEST_BACKEND=e2b SANDKEEP_E2B_TEMPLATE=sandkeep \
+      E2B_API_KEY=... pytest tests/test_boundary.py
+
+All E2B SDK calls are isolated in this module (verified against e2b 2.26.0;
+the SDK churns across versions — adjust here if yours differs).
 
 Design notes specific to E2B (vs Docker):
 - **No host bind-mount.** E2B can't mount your filesystem, so `create()` uploads
@@ -115,12 +124,16 @@ class E2BProvider(SandboxProvider):
         repo = Path(repo_path).resolve()
         if not repo.is_dir():
             raise SandboxError(f"repo path does not exist: {repo}")
+        opts = {"api_key": self.config.api_key} if self.config.api_key else {}
         try:
-            sbx = self._Sandbox(
+            # e2b SDK v2: Sandbox.create(...) is the constructor; network="none"
+            # maps to allow_internet_access=False (a real no-network posture).
+            sbx = self._Sandbox.create(
                 template=self.config.template,
-                api_key=self.config.api_key,
                 timeout=self.config.timeout_seconds,
                 envs=dict(env),
+                allow_internet_access=(self.config.network != "none"),
+                **opts,
             )
         except Exception as exc:  # SDK/network/auth failures surface as SandboxError
             raise SandboxError(f"E2B sandbox create failed: {exc}") from exc
@@ -128,19 +141,29 @@ class E2BProvider(SandboxProvider):
         sbx_id = getattr(sbx, "sandbox_id", None) or getattr(sbx, "id")
         self._cache[sbx_id] = sbx
 
-        # Upload the repo and make /src read-only (no host mount on E2B).
+        # No host mount on E2B: upload the repo, then build the boundary as
+        # root so the non-root agent can't subvert it —
+        #   /src : root-owned, read-only  (agent can read to clone, never write)
+        #   /work: world-writable workspace for the clone
+        # The agent's own exec() always runs as the default NON-ROOT user, so it
+        # cannot chmod/own /src back. (Privileged setup is provider-internal.)
         try:
             sbx.files.write("/tmp/_sk_repo.tar", _tar_repo(repo))
+            setup = sbx.commands.run(
+                f"mkdir -p {SRC_MOUNT} && tar -xf /tmp/_sk_repo.tar -C {SRC_MOUNT}"
+                f" && rm -f /tmp/_sk_repo.tar"
+                f" && chown -R root:root {SRC_MOUNT} && chmod -R a-w {SRC_MOUNT}"
+                " && mkdir -p /work && chmod 777 /work",
+                user="root",
+                timeout=120,
+            )
+        except self._ExitExc as exc:
+            self.destroy(SandboxHandle(id=sbx_id, workdir=WORKDIR))
+            raise SandboxError(f"E2B /src setup failed: {getattr(exc, 'stderr', exc)}") from exc
         except Exception as exc:
-            raise SandboxError(f"E2B repo upload failed: {exc}") from exc
-        setup = self.exec(
-            SandboxHandle(id=sbx_id, workdir=WORKDIR),
-            ["sh", "-c",
-             f"mkdir -p {SRC_MOUNT} && tar -xf /tmp/_sk_repo.tar -C {SRC_MOUNT}"
-             f" && rm -f /tmp/_sk_repo.tar && chmod -R a-w {SRC_MOUNT}"],
-            timeout=120,
-        )
-        if setup.exit_code != 0:
+            self.destroy(SandboxHandle(id=sbx_id, workdir=WORKDIR))
+            raise SandboxError(f"E2B repo upload/setup failed: {exc}") from exc
+        if getattr(setup, "exit_code", 0) != 0:
             self.destroy(SandboxHandle(id=sbx_id, workdir=WORKDIR))
             raise SandboxError(f"E2B /src setup failed: {setup.stderr.strip()}")
         return SandboxHandle(id=sbx_id, workdir=WORKDIR)
@@ -189,8 +212,9 @@ class E2BProvider(SandboxProvider):
         (so a fresh `sandkeep accept` process can still reach the sandbox)."""
         if sandbox_id in self._cache:
             return self._cache[sandbox_id]
+        opts = {"api_key": self.config.api_key} if self.config.api_key else {}
         try:
-            sbx = self._Sandbox.connect(sandbox_id, api_key=self.config.api_key)
+            sbx = self._Sandbox.connect(sandbox_id, **opts)
         except Exception as exc:
             raise SandboxError(f"E2B connect failed for {sandbox_id}: {exc}") from exc
         self._cache[sandbox_id] = sbx

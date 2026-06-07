@@ -41,8 +41,12 @@ def provision(
 
     branch = task_branch(task.id)
     steps: list[list[str]] = [
-        # /src is owned by a host uid; tell git inside it's ok to read
+        # /src is owned by a host/root uid the agent doesn't match; tell git
+        # inside it's ok to read it. Both the worktree and its .git are checked
+        # (the microVM backend roots /src, which trips git's dubious-ownership
+        # guard on /src/.git); harmless where ownership already matches (Docker).
         ["git", "config", "--global", "--add", "safe.directory", SRC_MOUNT],
+        ["git", "config", "--global", "--add", "safe.directory", f"{SRC_MOUNT}/.git"],
         # the independent clone: its own writable .git, host .git untouched.
         # submodules are not initialised, LFS is absent from the image —
         # TODO(phase-2): opt-in submodule/LFS support
