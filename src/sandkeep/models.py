@@ -59,6 +59,7 @@ class Task:
     branch: str = ""  # task branch inside the sandbox
     state: TaskState = TaskState.NEW
     model: str = "claude-sonnet-4-6"  # task-tier model; alias verified 2026-06 (BUILD_SPEC §2)
+    agent: str = "claude"  # which AgentDriver runs inside the sandbox (BUILD_SPEC §13)
     max_turns: int = 8
     allowed_tools: list[str] = field(
         default_factory=lambda: ["Read", "Edit", "Write", "Bash"]

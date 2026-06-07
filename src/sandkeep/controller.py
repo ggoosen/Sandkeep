@@ -21,6 +21,7 @@ import uuid
 from pathlib import Path
 
 from . import agent_runner, diff, results
+from .agent import get_driver
 from .audit import AuditLog, new_trace_id
 from .config import Config, resource_path
 from .models import ResultsContract, Task, TaskState
@@ -58,35 +59,35 @@ class Controller:
         instruction: str,
         *,
         model: str | None = None,
+        agent: str | None = None,
         max_turns: int | None = None,
         allowed_tools: list[str] | None = None,
     ) -> Task:
         """Run one governed task; returns the task in REVIEW on success or
         in a terminal failure state otherwise. Never raises for agent
-        failures — only for host-side misconfiguration."""
+        failures — only for host-side misconfiguration (an unknown agent
+        raises UnknownAgent before anything is provisioned)."""
         self.config.ensure_dirs()
+        # Resolve the driver BEFORE creating any state or sandbox: an unknown
+        # agent is host-side misconfiguration and must fail loud (BUILD_SPEC §13).
+        driver = get_driver(agent or self.config.agent)
         task = Task(
             id=uuid.uuid4().hex,
             repo_path=str(Path(repo_path).resolve()),
             instruction=instruction,
             model=model or self.config.model,
+            agent=driver.name,
             max_turns=max_turns or self.config.max_turns,
         )
         if allowed_tools:
             task.allowed_tools = allowed_tools
         self.store.create_task(task, new_trace_id())
 
-        # TODO(phase-2): secret-injecting proxy — the agent never holds the key
-        env = {}
-        api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-        if api_key:
-            env["ANTHROPIC_API_KEY"] = api_key
-
         handle: SandboxHandle | None = None
         started = time.monotonic()
         try:
             handle = provision(
-                task, self.provider, self.store, self.audit, env,
+                task, self.provider, self.store, self.audit, self._agent_env(driver),
                 trace_id=new_trace_id(), exec_timeout=self.config.exec_timeout_seconds,
             )
         except (ProvisioningError, SandboxError) as exc:
@@ -95,10 +96,11 @@ class Controller:
         task.base_ref = self.store.get_task(task.id).base_ref  # pinned SHA
 
         self.store.update_state(task.id, TaskState.RUNNING, new_trace_id(), "agent dispatched")
-        agent_runner.install_system_prompt(
-            self.provider, handle,
-            (resource_path("prompts") / "agent_system_prompt.md").read_text(),
-        )
+        if driver.produces_contract:
+            agent_runner.install_system_prompt(
+                self.provider, handle,
+                (resource_path("prompts") / "agent_system_prompt.md").read_text(),
+            )
         run = agent_runner.run_agent(
             task, self.provider, handle, self.audit,
             trace_id=new_trace_id(), timeout=self.config.task_timeout_seconds,
@@ -119,23 +121,32 @@ class Controller:
             self._fail(task, handle, run.detail or f"agent exited {run.exit_code}")
             return self.store.get_task(task.id)
 
-        # results contract + patch are the only things that cross back
-        try:
-            raw = self.provider.read_file(handle, agent_runner.RESULTS_JSON_PATH)
-            contract = results.parse_results(raw, expected_task_id=task.id)
-        except (FileNotFoundError, results.ContractError) as exc:
-            self._fail(task, handle, f"results contract invalid: {exc}")
-            return self.store.get_task(task.id)
-
-        if contract.status != "succeeded":
-            self._fail(task, handle, f"agent reported status={contract.status}: {contract.summary}")
-            return self.store.get_task(task.id)
-
         in_tok, out_tok = agent_runner.usage_from_output(run.output)
-        self._land_in_review(
-            task, handle, raw, contract.summary,
-            usage=(in_tok, out_tok), sandbox_seconds=sandbox_seconds,
-        )
+        if driver.produces_contract:
+            # results contract + patch are the only things that cross back
+            try:
+                raw = self.provider.read_file(handle, agent_runner.RESULTS_JSON_PATH)
+                contract = results.parse_results(raw, expected_task_id=task.id)
+            except (FileNotFoundError, results.ContractError) as exc:
+                self._fail(task, handle, f"results contract invalid: {exc}")
+                return self.store.get_task(task.id)
+            if contract.status != "succeeded":
+                self._fail(
+                    task, handle,
+                    f"agent reported status={contract.status}: {contract.summary}",
+                )
+                return self.store.get_task(task.id)
+            self._land_in_review(
+                task, handle, raw, contract.summary,
+                usage=(in_tok, out_tok), sandbox_seconds=sandbox_seconds,
+            )
+        else:
+            # No agent-written contract; the diff is the truth (BUILD_SPEC §13).
+            self._land_from_diff(
+                task, handle,
+                summary=f"{driver.name} run (diff-synthesized contract).",
+                usage=(in_tok, out_tok), sandbox_seconds=sandbox_seconds,
+            )
         return self.store.get_task(task.id)
 
     # -- the interactive session (Phase 1, `sandkeep shell`) --------------
@@ -146,32 +157,30 @@ class Controller:
         *,
         instruction: str = "interactive session",
         model: str | None = None,
+        agent: str | None = None,
         seed: str | None = None,
         skip_permissions: bool = True,
     ) -> Task:
         """Provision the same sandbox, drop the user into an interactive
-        Claude Code session on the clone, and on exit land at REVIEW with a
+        agent session on the clone, and on exit land at REVIEW with a
         host-synthesized contract — or roll back if nothing changed
         (BUILD_SPEC §10b). Returns the task in its resulting state."""
         self.config.ensure_dirs()
+        driver = get_driver(agent or self.config.agent)  # fail loud on unknown
         task = Task(
             id=uuid.uuid4().hex,
             repo_path=str(Path(repo_path).resolve()),
             instruction=instruction,
             model=model or self.config.model,
+            agent=driver.name,
         )
         self.store.create_task(task, new_trace_id())
-
-        env = {}
-        api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-        if api_key:
-            env["ANTHROPIC_API_KEY"] = api_key
 
         handle: SandboxHandle | None = None
         started = time.monotonic()
         try:
             handle = provision(
-                task, self.provider, self.store, self.audit, env,
+                task, self.provider, self.store, self.audit, self._agent_env(driver),
                 trace_id=new_trace_id(), exec_timeout=self.config.exec_timeout_seconds,
             )
         except (ProvisioningError, SandboxError) as exc:
@@ -193,6 +202,39 @@ class Controller:
         )
 
         # No agent contract for an interactive run; the diff is the truth.
+        self._land_from_diff(
+            task, handle,
+            summary=f"Interactive {driver.name} session.",
+            usage=(0, 0), sandbox_seconds=sandbox_seconds,
+            empty_detail="no changes made in the interactive session",
+        )
+        return self.store.get_task(task.id)
+
+    # -- shared helpers ----------------------------------------------------
+
+    def _agent_env(self, driver) -> dict[str, str]:
+        """The sandbox environment for a driver: forward its declared secret
+        from the host shell if present (BUILD_SPEC §13 first cut).
+        TODO(phase-2): secret-injecting proxy — the agent never holds the key."""
+        env: dict[str, str] = {}
+        secret = os.environ.get(driver.secret_env, "")
+        if secret:
+            env[driver.secret_env] = secret
+        return env
+
+    def _land_from_diff(
+        self,
+        task: Task,
+        handle: SandboxHandle,
+        *,
+        summary: str,
+        usage: tuple[int, int],
+        sandbox_seconds: float,
+        empty_detail: str = "no changes produced",
+    ) -> None:
+        """Synthesize a contract from the extracted diff (the diff is the
+        truth) and land at REVIEW — or fail if the diff is empty. Shared by
+        the interactive path and headless drivers that write no contract."""
         try:
             patch_path = diff.extract_patch(
                 self.provider, handle, task, self.config.outputs_dir,
@@ -200,25 +242,21 @@ class Controller:
             )
         except diff.DiffError as exc:
             self._fail(task, handle, f"could not extract diff: {exc}")
-            return self.store.get_task(task.id)
-
+            return
         if patch_path.stat().st_size == 0:
-            self._fail(task, handle, "no changes made in the interactive session")
-            return self.store.get_task(task.id)
-
-        files = diff.files_in_patch(patch_path.read_text())
+            self._fail(task, handle, empty_detail)
+            return
         contract = ResultsContract(
             task_id=task.id,
             status="succeeded",
-            summary="Interactive Claude Code session.",
-            files_changed=files,
+            summary=summary,
+            files_changed=diff.files_in_patch(patch_path.read_text()),
         )
         raw = json.dumps(dataclasses.asdict(contract))
         self._land_in_review(
-            task, handle, raw, contract.summary,
-            usage=(0, 0), sandbox_seconds=sandbox_seconds, patch_path=patch_path,
+            task, handle, raw, summary,
+            usage=usage, sandbox_seconds=sandbox_seconds, patch_path=patch_path,
         )
-        return self.store.get_task(task.id)
 
     def _land_in_review(
         self,

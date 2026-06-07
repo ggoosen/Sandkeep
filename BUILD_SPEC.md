@@ -370,10 +370,61 @@ Leave `TODO(phase-N)` markers; do not implement until the phase is started.
 - **Phase 2 — Real isolation + parallelism:** microVM `SandboxProvider` (E2B / Firecracker / Docker Sandboxes); snapshot/restore; concurrency + warm pool; secret-injecting broker (agent never holds the key); proper brokering egress proxy; draft-PR human gate.
 - **Phase 3 — Coordination & policy:** cross-task conflict detection; test-gated merge queue; diff risk analysis (flag workflow/deploy/auth/secret/dep changes); richer `policy.py`.
 - **Phase 4 — Capability authoring:** agents author per-repo scoped skills inside their sandbox.
+- **Phase 5 — Pluggable agents:** the hardwired `claude` CLI becomes one `AgentDriver` among several (Codex, Aider, …); `--agent`/config selection; per-agent images; per-agent secret env; diff-only contract fallback for agents that don't write `results.json`. Full design + status in §13. **Core seam implemented**; two pieces deferred (see §13).
 
 ---
 
-## 13. References
+## 13. Pluggable agent drivers (Phase 5 — core implemented)
+
+> **Status.** Core seam built and tested (`src/sandkeep/agent/`, `tests/test_agent_driver.py`). The default Claude path is byte-identical behind the new interface; the full suite incl. the boundary suite passes. **Deferred** (clearly bounded, not faked): (a) per-agent **image templating** — `image build --agent <name>` errors for non-default agents until the Dockerfile is rendered from `driver.install_steps()`; (b) per-agent **secret storage** — `auth set --agent <name>`; the first cut forwards `driver.secret_env` from the host shell. Shipping a real second driver (Codex/Aider) needs its CLI flags verified at build time, same discipline as §6.
+
+The boundary is **agent-agnostic**: containment comes from the sandbox, not from which agent runs inside it (the boundary suite, §9–§10, proves this without reference to Claude). So any file-editing CLI agent can run in the box and inherit the same guarantees. Phase 5 makes that explicit.
+
+**Invariant (unchanged):** drivers run **only inside the sandbox**; the controller never executes agent code; only a diff (+ contract) crosses back. A new driver must not weaken the boundary — **the unmodified boundary suite must still pass with any driver selected.** Golden rule still holds: the driver only *builds command strings* on the host; the agent still executes solely inside the sandbox.
+
+Today the `claude` CLI is hardwired in three places, which Phase 5 extracts:
+1. **The image** — `sandbox_image/Dockerfile` installs `@anthropic-ai/claude-code`.
+2. **`agent_runner.py`** — constructs `claude` commands and parses Claude's `--output-format json`.
+3. **The headless contract** — the agent is prompted to write `.sandkeep/results.json` (§6).
+
+### Interface (`agent/base.py`)
+
+```python
+class AgentDriver(ABC):
+    name: str               # "claude", "codex", ...
+    secret_env: str         # host env var to forward, e.g. "ANTHROPIC_API_KEY"
+    produces_contract: bool # True: writes results.json; False: diff is the truth
+
+    def install_steps(self) -> list[str]: ...   # Dockerfile lines for this agent's CLI
+    def build_command(self, task) -> str: ...                       # headless
+    def build_interactive_command(self, task, *, seed, skip_permissions) -> list[str]: ...
+    def parse_result(self, exec_result: ExecResult) -> AgentRunResult: ...  # exit codes, error detail, tokens
+```
+
+`agent_runner.py` becomes a thin dispatcher: resolve the driver by name, call build/parse. **Today's logic moves verbatim into a `ClaudeDriver`** — no behavior change for the default.
+
+### Selection (mirror `model`)
+
+- `Config.agent: str = "claude"`, with a `SANDKEEP_AGENT` env override (exact twin of how `model`/`SANDKEEP_MODEL` already work in `config.py`).
+- `--agent <name>` on `run` and `shell`; precedence **flag > env > config**.
+- Persist `agent` on the task (new `tasks.agent` column) so `status`/`show` report which agent produced a diff and the ledger attributes cost per agent.
+
+### Decisions (resolved)
+
+1. **Image — per-agent images.** `sandkeep image build --agent <name>` renders the Dockerfile with the driver's `install_steps()`, tagged `sandkeep-img:<name>`; the provider launches the image matching the task's agent. *(Rejected: one fat image with every CLI — ships unused binaries and enlarges the in-box attack surface.)*
+2. **Secret — driver-declared env var.** The controller forwards only the driver's `secret_env` into the sandbox. First cut: forward it from the host shell if set. Follow-up: `sandkeep auth set --agent <name>` stores per-agent keys (multi-key store). The Phase 0–1 `TODO(phase-2)` secret-broker note applies to every driver.
+3. **Contract — diff-only fallback.** When `produces_contract=False`, the headless `run` path uses the **same host-side diff-synthesis the interactive `shell` path already uses** (§10b). This removes the Claude-specific `results.json` dependency for other agents and simplifies the runner.
+
+### Acceptance (`test_agent_driver.py`)
+
+- `ClaudeDriver` produces **byte-identical** commands to the pre-refactor `build_command`/`build_interactive_command` (proves the default is unchanged).
+- An unknown `--agent` fails **loud on the host, before any sandbox is created**.
+- A stub driver with `produces_contract=False` runs end-to-end to `REVIEW` via diff-synthesis.
+- The **unmodified boundary suite passes** regardless of which driver is selected.
+
+---
+
+## 14. References
 
 - Claude Code headless mode (flags, output formats, exit codes): https://docs.claude.com/en/docs/claude-code/overview and the headless/CI-CD docs. Re-verify `--max-turns`, `--allowedTools`, `--output-format json`, and the current model alias with `claude --help` at build time.
 - Design rationale, threat model, and the five-tier architecture: the Sandkeep v2 design doc.

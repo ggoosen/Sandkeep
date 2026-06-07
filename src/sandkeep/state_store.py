@@ -24,6 +24,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     branch      TEXT NOT NULL DEFAULT '',
     state       TEXT NOT NULL,
     model       TEXT NOT NULL,
+    agent       TEXT NOT NULL DEFAULT 'claude',
     max_turns   INTEGER NOT NULL,
     sandbox_id  TEXT NOT NULL DEFAULT '',
     patch_path  TEXT NOT NULL DEFAULT '',
@@ -70,7 +71,18 @@ class StateStore:
         self._conn = sqlite3.connect(str(db_path))
         self._conn.row_factory = sqlite3.Row
         self._conn.executescript(_SCHEMA)
+        self._migrate()
         self._audit = audit
+
+    def _migrate(self) -> None:
+        """Additive, idempotent migrations for DBs created before a column
+        existed (the schema's CREATE IF NOT EXISTS won't alter an old table)."""
+        cols = {r["name"] for r in self._conn.execute("PRAGMA table_info(tasks)")}
+        if "agent" not in cols:  # added in Phase 5 (BUILD_SPEC §13)
+            with self._conn:
+                self._conn.execute(
+                    "ALTER TABLE tasks ADD COLUMN agent TEXT NOT NULL DEFAULT 'claude'"
+                )
 
     def close(self) -> None:
         self._conn.close()
@@ -82,8 +94,8 @@ class StateStore:
         with self._conn:
             self._conn.execute(
                 "INSERT INTO tasks (id, repo_path, instruction, base_ref, branch,"
-                " state, model, max_turns, sandbox_id, patch_path, created_at, updated_at)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " state, model, agent, max_turns, sandbox_id, patch_path, created_at, updated_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     task.id,
                     task.repo_path,
@@ -92,6 +104,7 @@ class StateStore:
                     task.branch,
                     task.state.value,
                     task.model,
+                    task.agent,
                     task.max_turns,
                     task.sandbox_id,
                     task.patch_path,
@@ -116,6 +129,7 @@ class StateStore:
             branch=row["branch"],
             state=TaskState(row["state"]),
             model=row["model"],
+            agent=row["agent"],
             max_turns=row["max_turns"],
             sandbox_id=row["sandbox_id"],
             patch_path=row["patch_path"],
