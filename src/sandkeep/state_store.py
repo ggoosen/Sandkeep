@@ -127,7 +127,7 @@ class StateStore:
 
     def update_fields(self, task_id: str, **fields: str) -> None:
         """Update mutable non-state columns (branch, sandbox_id, patch_path)."""
-        allowed = {"branch", "sandbox_id", "patch_path"}
+        allowed = {"branch", "sandbox_id", "patch_path", "base_ref"}
         bad = set(fields) - allowed
         if bad:
             raise ValueError(f"not updatable here: {sorted(bad)}")

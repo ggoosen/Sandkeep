@@ -63,6 +63,17 @@ def provision(
                 f"provisioning step failed ({' '.join(cmd)}): {result.stderr.strip()}"
             )
 
+    # pin base_ref to a concrete SHA: "HEAD" would drift once the agent
+    # commits, and the diff (§7) and host apply (§10) must share one base
+    rev = provider.exec(
+        handle, ["git", "-C", handle.workdir, "rev-parse", "HEAD"], timeout=exec_timeout
+    )
+    if rev.exit_code != 0:
+        raise ProvisioningError(f"could not resolve base ref: {rev.stderr.strip()}")
+    base_sha = rev.stdout.strip()
+    store.update_fields(task.id, base_ref=base_sha)
+    task.base_ref = base_sha
+
     # best-effort toolchain pinning (BUILD_SPEC §5.4) — never fatal
     mise = provider.exec(
         handle,
