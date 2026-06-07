@@ -127,10 +127,20 @@ An agent can **author skills** while it works — small markdown capability file
 
 ## Extending it
 
-Sandkeep talks to sandboxes through a single `SandboxProvider` interface. Adding a
-new backend (microVM, remote sandbox service) is the main extension point — and the
-contract is strict: **any backend must pass the unmodified boundary test suite**
-(`tests/test_boundary.py`). See [CONTRIBUTING.md](CONTRIBUTING.md).
+Two clean extension points:
+
+- **Sandbox backends** — Sandkeep talks to sandboxes through one `SandboxProvider`
+  interface. Adding a new backend (the **microVM** for real containment, or a
+  remote sandbox service) is the main one, and the contract is strict: **any
+  backend must pass the unmodified boundary suite** (`tests/test_boundary.py`).
+- **Agents** — agents are pluggable behind `AgentDriver` (`--agent`); `claude` is
+  the default. Adding e.g. Codex is a contained change.
+
+Start with **[CONTRIBUTING.md](CONTRIBUTING.md)** for setup, the rules, and the
+extension walkthroughs. If you specifically want to build the real boundary, the
+step-by-step guide — including a concrete **E2B microVM** path and how the egress
+proxy / secret broker slot in — is
+**[docs/phase-2-implementation.md](docs/phase-2-implementation.md)**.
 
 ## Requirements
 
