@@ -70,6 +70,21 @@ def _mask(key: str) -> str:
     return f"{key[:7]}…{key[-4:]}" if len(key) > 14 else "…"
 
 
+def _print_policy(controller: Controller, task) -> None:
+    """Surface Phase 3 diff-risk flags + cross-task conflicts at the gate
+    (advisory — the human still decides)."""
+    flags = controller.risk_flags(task)
+    if flags:
+        print("\n  ⚠ risk flags:")
+        for f in flags:
+            print(f"      [{f.category}] {f.detail}")
+    conflicts = controller.conflicts(task)
+    if conflicts:
+        print("\n  ⚠ conflicts — other tasks in review touch the same files:")
+        for c in conflicts:
+            print(f"      {c.other_task_id}: {', '.join(c.files)}")
+
+
 def _cmd_auth(cfg: Config, args: argparse.Namespace) -> int:
     if args.auth_command == "set":
         if sys.stdin.isatty():
@@ -148,6 +163,7 @@ def _cmd_run(cfg: Config, args: argparse.Namespace) -> int:
         print(f"\n  summary: {contract['summary']}")
         print(f"  files:   {', '.join(contract['files_changed'])}")
         print(f"  patch:   {task.patch_path}")
+        _print_policy(controller, task)
         print(f"\n  sandkeep accept {task.id}   # apply to a fresh branch")
         print(f"  sandkeep reject {task.id}   # discard")
         return 0
@@ -174,6 +190,7 @@ def _cmd_shell(cfg: Config, args: argparse.Namespace) -> int:
     if task.state is TaskState.REVIEW:
         print(f"\nsession ended — task {task.id} is ready for review")
         print(f"  patch: {task.patch_path}")
+        _print_policy(controller, task)
         print(f"\n  sandkeep show   {task.id}")
         print(f"  sandkeep accept {task.id}   # apply to a fresh branch")
         print(f"  sandkeep reject {task.id}   # discard")
@@ -206,13 +223,22 @@ def _cmd_show(cfg: Config, args: argparse.Namespace) -> int:
         print(json.dumps(json.loads(results_path.read_text()), indent=2))
     if task.patch_path:
         print(f"\npatch: {task.patch_path}")
+    _print_policy(controller, task)
     return 0
 
 
 def _cmd_accept(cfg: Config, args: argparse.Namespace) -> int:
     controller = _make_controller(cfg, network="none")
-    sha = controller.accept(args.task_id)
     task = controller.store.get_task(args.task_id)
+    conflicts = controller.conflicts(task)
+    if conflicts:
+        print("⚠ warning: this patch overlaps files with other tasks awaiting review:",
+              file=sys.stderr)
+        for c in conflicts:
+            print(f"    {c.other_task_id}: {', '.join(c.files)}", file=sys.stderr)
+        print("  applying anyway (human gate) — re-review the others before accepting them.",
+              file=sys.stderr)
+    sha = controller.accept(args.task_id)
     print(f"applied to branch sandkeep-accepted/{task.id} @ {sha[:12]}")
     print("your working tree and current branch are untouched")
     return 0
