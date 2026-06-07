@@ -367,7 +367,7 @@ diff), printing the same accept/reject instructions as `run`.
 
 Leave `TODO(phase-N)` markers; do not implement until the phase is started.
 
-- **Phase 2 — Real isolation + parallelism:** microVM `SandboxProvider` (E2B / Firecracker / Docker Sandboxes); snapshot/restore; concurrency + warm pool; secret-injecting broker (agent never holds the key); proper brokering egress proxy; draft-PR human gate.
+- **Phase 2 — Real isolation + parallelism:** microVM `SandboxProvider` (E2B / Firecracker / Docker Sandboxes); snapshot/restore; concurrency + warm pool; secret-injecting broker (agent never holds the key); proper brokering egress proxy; draft-PR human gate. Status in §16. **Network-off toggle implemented**; the rest is a hard infra wall (microVM/cloud/GitHub) — see §16.
 - **Phase 3 — Coordination & policy:** cross-task conflict detection; test-gated merge queue; diff risk analysis (flag workflow/deploy/auth/secret/dep changes); richer `policy.py`. Full status in §14. **Risk analysis + conflict detection implemented**; test-gated merge queue deferred (see §14).
 - **Phase 4 — Capability authoring:** agents author per-repo scoped skills inside their sandbox. Full status in §15. **Implemented** (authoring, per-repo store, injection).
 - **Phase 5 — Pluggable agents:** the hardwired `claude` CLI becomes one `AgentDriver` among several (Codex, Aider, …); `--agent`/config selection; per-agent images; per-agent secret env; diff-only contract fallback for agents that don't write `results.json`. Full design + status in §13. **Core seam implemented**; two pieces deferred (see §13).
@@ -478,7 +478,34 @@ CLI: `sandkeep skills list --repo <path>` shows a repo's registered skills.
 
 ---
 
-## 16. References
+## 16. Real isolation + parallelism (Phase 2 — slice implemented; rest is an infra wall)
+
+> **Status.** Only one slice is honestly buildable + testable on a dev machine: the **network-off toggle** (`SANDKEEP_NETWORK` / `--no-network`, `src/sandkeep/config.py` + `cli.py`, `tests/test_network.py`). Everything else in Phase 2 needs infrastructure this repo can't provision and is **deliberately not stubbed** — config-only stubs would imply security guarantees that don't exist, which is the exact anti-pattern Sandkeep warns about.
+
+### Implemented: network toggle
+
+The Docker provider already supports `--network none`; Phase 2 exposes it. `network` is config (`SANDKEEP_NETWORK`, default `egress`) with a `--no-network` override on `run`/`shell` (precedence flag > env > default). `none` = the boundary-test posture: the agent cannot reach its API, so a normal run will fail — it's for boundary testing or a future offline/local-model agent. The CLI warns when network is off. `egress` remains the open bridge.
+
+### Deferred — needs infrastructure, NOT stubbed (and why)
+
+| Piece | Why it can't be built/tested here | Why no stub |
+|---|---|---|
+| **microVM `SandboxProvider`** (Firecracker/E2B) | needs KVM or a cloud account | the boundary is the product; a fake microVM would be a lie |
+| **brokering egress *allowlist* proxy** | needs a real proxy enforcing per-host rules | an unenforced allowlist config reads as "exfil is blocked" when it isn't |
+| **secret-injecting broker** (agent never holds the key) | needs the proxy to inject creds out-of-band | a config flag can't stop the agent seeing an env var; pretending it does is false security |
+| **draft-PR human gate** | needs a GitHub remote + auth | nothing to test against locally |
+| **concurrency + warm pool / snapshot-restore** | large architectural change; value is coupled to the microVM | premature without the real backend |
+
+Each remains marked `TODO(phase-2)` in code. The `SandboxProvider` ABC (§4) is the seam: a microVM backend drops in there and **must pass the unmodified boundary suite** (§9–§10) — that contract is what makes the deferral safe.
+
+### Acceptance (`test_network.py`)
+
+- `SANDKEEP_NETWORK` defaults to `egress`, accepts `none`, rejects unknown values.
+- `--no-network` forces `none`; absent, config/env wins. (The `none` posture's actual egress block is already proven by the boundary suite running under `--network none`.)
+
+---
+
+## 17. References
 
 - Claude Code headless mode (flags, output formats, exit codes): https://docs.claude.com/en/docs/claude-code/overview and the headless/CI-CD docs. Re-verify `--max-turns`, `--allowedTools`, `--output-format json`, and the current model alias with `claude --help` at build time.
 - Design rationale, threat model, and the five-tier architecture: the Sandkeep v2 design doc.

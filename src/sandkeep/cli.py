@@ -71,6 +71,25 @@ def _mask(key: str) -> str:
     return f"{key[:7]}…{key[-4:]}" if len(key) > 14 else "…"
 
 
+def _resolve_network(cfg: Config, args: argparse.Namespace) -> str:
+    """Network mode for a run: `--no-network` forces off, else config/env
+    (SANDKEEP_NETWORK, default egress). The agent needs egress for its API, so
+    `none` is for boundary testing / offline agents (BUILD_SPEC §16)."""
+    if getattr(args, "no_network", False):
+        return "none"
+    return cfg.network
+
+
+def _warn_if_no_network(network: str) -> None:
+    if network == "none":
+        print(
+            "⚠ --no-network: the sandbox has NO network. The agent cannot reach "
+            "its API, so a normal run will fail — this is for boundary testing or "
+            "an offline agent.",
+            file=sys.stderr,
+        )
+
+
 def _print_policy(controller: Controller, task) -> None:
     """Surface Phase 3 diff-risk flags + cross-task conflicts at the gate
     (advisory — the human still decides)."""
@@ -152,9 +171,11 @@ def _cmd_run(cfg: Config, args: argparse.Namespace) -> int:
     if not _ensure_secret(cfg, driver):
         return 2
     print(SECURITY_BANNER, file=sys.stderr)
-    # the agent needs egress to api.anthropic.com — gated here on purpose;
-    # TODO(phase-2): brokering egress proxy + secret broker
-    controller = _make_controller(cfg, network="egress")
+    # the agent needs egress to api.anthropic.com by default — gated here on
+    # purpose; TODO(phase-2): brokering egress *allowlist* proxy + secret broker.
+    network = _resolve_network(cfg, args)
+    _warn_if_no_network(network)
+    controller = _make_controller(cfg, network=network)
     task = controller.run_task(
         args.repo,
         args.task,
@@ -186,9 +207,11 @@ def _cmd_shell(cfg: Config, args: argparse.Namespace) -> int:
     print(SECURITY_BANNER, file=sys.stderr)
     print("provisioning sandbox — your repo is mounted read-only, work happens "
           "on a clone inside\n", file=sys.stderr)
-    # interactive agent needs egress to api.anthropic.com (gated on purpose;
-    # TODO(phase-2): brokering egress proxy)
-    controller = _make_controller(cfg, network="egress")
+    # interactive agent needs egress to api.anthropic.com by default (gated on
+    # purpose; TODO(phase-2): brokering egress allowlist proxy)
+    network = _resolve_network(cfg, args)
+    _warn_if_no_network(network)
+    controller = _make_controller(cfg, network=network)
     task = controller.run_interactive(
         args.repo, model=args.model, agent=driver.name, seed=args.task,
         skip_permissions=args.skip_permissions,
@@ -300,6 +323,11 @@ def build_parser() -> argparse.ArgumentParser:
              f"available: {', '.join(available_agents())})",
     )
     run.add_argument("--max-turns", type=int, default=None)
+    run.add_argument(
+        "--no-network", action="store_true",
+        help="run with no network at all (agent can't reach its API; for "
+             "boundary testing / offline agents). Default: egress (SANDKEEP_NETWORK).",
+    )
 
     shell = sub.add_parser(
         "shell", help="open an interactive Claude Code session inside a sandbox"
@@ -320,6 +348,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_false",
         help="restore Claude Code permission prompts (default: skipped, since "
              "the session runs inside the sandbox)",
+    )
+    shell.add_argument(
+        "--no-network", action="store_true",
+        help="run with no network at all (agent can't reach its API; for "
+             "boundary testing / offline agents). Default: egress (SANDKEEP_NETWORK).",
     )
 
     sk = sub.add_parser("skills", help="manage per-repo authored skills")
