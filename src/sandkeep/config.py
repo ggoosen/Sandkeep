@@ -12,6 +12,8 @@ from pathlib import Path
 
 DEFAULT_MODEL = "claude-sonnet-4-6"
 DEFAULT_AGENT = "claude"
+DEFAULT_NETWORK = "egress"  # "egress" (bridge) | "none" (no network at all)
+NETWORK_MODES = ("egress", "none")
 DEFAULT_MAX_TURNS = 8
 DEFAULT_TASK_TIMEOUT_SECONDS = 1800  # wall-clock cap for the agent run
 DEFAULT_EXEC_TIMEOUT_SECONDS = 120  # cap for individual sandbox exec calls
@@ -28,6 +30,7 @@ class Config:
     image: str = DEFAULT_IMAGE
     model: str = DEFAULT_MODEL
     agent: str = DEFAULT_AGENT
+    network: str = DEFAULT_NETWORK
     max_turns: int = DEFAULT_MAX_TURNS
     task_timeout_seconds: int = DEFAULT_TASK_TIMEOUT_SECONDS
     exec_timeout_seconds: int = DEFAULT_EXEC_TIMEOUT_SECONDS
@@ -38,6 +41,11 @@ class Config:
         cfg.image = os.environ.get("SANDKEEP_IMAGE", cfg.image)
         cfg.model = os.environ.get("SANDKEEP_MODEL", cfg.model)
         cfg.agent = os.environ.get("SANDKEEP_AGENT", cfg.agent)
+        cfg.network = os.environ.get("SANDKEEP_NETWORK", cfg.network)
+        if cfg.network not in NETWORK_MODES:
+            raise ValueError(
+                f"SANDKEEP_NETWORK must be one of {NETWORK_MODES}, got {cfg.network!r}"
+            )
         if "SANDKEEP_MAX_TURNS" in os.environ:
             cfg.max_turns = int(os.environ["SANDKEEP_MAX_TURNS"])
         if "SANDKEEP_TASK_TIMEOUT" in os.environ:
