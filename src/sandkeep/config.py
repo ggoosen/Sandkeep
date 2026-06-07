@@ -62,3 +62,18 @@ class Config:
         self.home.mkdir(parents=True, exist_ok=True)
         self.outputs_dir.mkdir(parents=True, exist_ok=True)
         self.archive_dir.mkdir(parents=True, exist_ok=True)
+
+
+def resource_path(name: str) -> Path:
+    """Locate a repo-level resource dir (sandbox_image/, prompts/).
+
+    These live at the repo root per BUILD_SPEC §1; wheels also bundle them
+    inside the package (pyproject force-include) so installed copies work.
+    """
+    package_local = Path(__file__).parent / name  # installed wheel
+    if package_local.is_dir():
+        return package_local
+    repo_root = Path(__file__).parents[2] / name  # editable/dev checkout
+    if repo_root.is_dir():
+        return repo_root
+    raise FileNotFoundError(f"resource directory not found: {name}")

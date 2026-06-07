@@ -38,6 +38,12 @@ Issues = "https://github.com/<your-org>/sandkeep/issues"
 [tool.hatch.build.targets.wheel]
 packages = ["src/sandkeep"]
 
+[tool.hatch.build.targets.wheel.force-include]
+# repo-root resource dirs (BUILD_SPEC §1) bundled into installed wheels;
+# config.resource_path() resolves them in both layouts
+"sandbox_image" = "sandkeep/sandbox_image"
+"prompts" = "sandkeep/prompts"
+
 [tool.ruff]
 target-version = "py312"
 line-length = 100
