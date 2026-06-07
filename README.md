@@ -4,7 +4,7 @@
 
 [![CI](https://github.com/<your-org>/sandkeep/actions/workflows/ci.yml/badge.svg)](https://github.com/<your-org>/sandkeep/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/sandkeep.svg)](https://pypi.org/project/sandkeep/)
-[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![License](https://img.shields.io/badge/license-PolyForm%20Noncommercial-blue.svg)](LICENSE)
 
 ## ⚠️ Security status — read before using
 
@@ -126,4 +126,13 @@ The full build spec lives here: **[docs/native-harness-build-spec.md](docs/nativ
 
 ## License
 
-Apache-2.0. See [LICENSE](LICENSE).
+**Source-available** under the [PolyForm Noncommercial License 1.0.0](LICENSE) —
+*not* an OSI open-source license. You may use, modify, and redistribute Sandkeep
+freely for any **noncommercial** purpose (personal, research, education,
+non-profit, evaluation).
+
+**Commercial use of any kind requires a paid license.** If you want to use
+Sandkeep in or for a commercial product, service, or business, contact
+**info@elusivecoffee.com.au** to arrange one.
+
+See [NOTICE](NOTICE) for attribution requirements.

@@ -125,7 +125,7 @@ delivery modes from one source (§8).
 ```
 cordon/
   README.md                      # what it is + the security-honesty callout
-  LICENSE                        # Apache-2.0 or MIT
+  LICENSE                        # PolyForm Noncommercial 1.0.0 (inherits Sandkeep's model)
   docs/
     design.md                    # this spec, refined
     enforcement-model.md         # the four levers + their honest limits
@@ -673,7 +673,7 @@ curl -fsSL https://raw.githubusercontent.com/<you>/cordon/main/install.sh | bash
   "name": "cordon",
   "description": "Force every Claude Code session into an isolated, sandboxed, diff-gated workflow.",
   "version": "0.1.0",
-  "license": "Apache-2.0",
+  "license": "LicenseRef-PolyForm-Noncommercial-1.0.0",
   "author": { "name": "<you>" },
   "repository": "https://github.com/<you>/cordon"
 }
@@ -810,4 +810,14 @@ Cordon and Sandkeep are one mental model, two engines:
 Ship Cordon's README pointing at Sandkeep for the high-trust-boundary case, and
 Sandkeep's README pointing at Cordon for the "I just want disciplined native
 sessions" case. Two doors, one house.
+
+**Licensing — inherit Sandkeep's model.** Cordon ships **source-available** under
+the **PolyForm Noncommercial License 1.0.0**, same as Sandkeep: free for any
+noncommercial use (use, modify, redistribute), commercial use requires a paid
+license from the licensor. Do **not** call it "open source" (it isn't, in the OSI
+sense) — call it source-available. Ship `LICENSE` (PolyForm verbatim, with a
+`Required Notice:` copyright line) + `NOTICE`, set
+`license = "LicenseRef-PolyForm-Noncommercial-1.0.0"` in `pyproject`/`plugin.json`,
+use the `License :: Free for non-commercial use` classifier, and put a "Commercial
+use? Contact <email>" line in the README. This is informational, not legal advice.
 ```

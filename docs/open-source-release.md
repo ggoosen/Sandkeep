@@ -23,11 +23,33 @@ This tool's premise is running untrusted agents safely, but the Phase 0/1 Docker
 
 ## 1. License
 
-**Recommended: Apache-2.0.** It's permissive (maximises adoption), includes an explicit patent grant (worth having for a novel architecture), and is what the surrounding ecosystem and standards bodies use. MIT is the lighter alternative if you want minimalism and don't care about the patent clause.
+**Decided: PolyForm Noncommercial License 1.0.0 (source-available).** The owner
+chose to retain the right to be paid whenever Sandkeep is commercialised, so the
+permissive route (Apache-2.0/MIT, which grant free commercial use) was *not*
+taken. Under PolyForm Noncommercial, anyone may use, modify, and redistribute
+Sandkeep for any **noncommercial** purpose free of charge; **commercial use of
+any kind requires a paid license** from the licensor. Unlike the Business Source
+License, it does **not** convert to open source on a change date — the
+commercial-licensing right does not expire.
 
-If you may build a commercial offering later, Apache-2.0 core + separate commercial add-ons (open-core) is the clean path; don't reach for source-available/BSL unless you've decided to monetise the core itself, as it dampens adoption.
+> Earlier drafts of this guide recommended Apache-2.0 for adoption. That advice is
+> superseded by the decision above; it's retained here only as context.
 
-Action: add a standard `LICENSE` file (copy verbatim from apache.org/licenses/LICENSE-2.0.txt or choosealicense.com) and an `Apache-2.0` SPDX header where appropriate. Add a `NOTICE` file with copyright.
+**Critical labelling rule:** this is **source-available, NOT "open source"** in
+the OSI sense. Do not call it open source anywhere (README, PyPI, marketing) — the
+community pushes back hard on mislabelling, and it's simply inaccurate. "Source-
+available" / "free for noncommercial use" is correct.
+
+Action (done in-repo): `LICENSE` holds the PolyForm Noncommercial 1.0.0 text
+verbatim with a `Required Notice:` copyright line; `NOTICE` carries the copyright
+and the commercial-licensing contact; `pyproject.toml` sets
+`license = "LicenseRef-PolyForm-Noncommercial-1.0.0"` with the
+`License :: Free for non-commercial use` classifier (the OSI-Apache classifier was
+removed); the README states the model and the commercial-contact email.
+
+> **Not legal advice.** PolyForm is a well-used, plain-language template, but if
+> real money will ride on enforcement, have a lawyer confirm the wording and your
+> commercial-licensing terms.
 
 ---
 
