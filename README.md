@@ -68,11 +68,22 @@ sandkeep run --repo /path/to/repo --task "Add input validation to parse_config()
 # inside the sandbox, on a throwaway clone — exits at the same review gate
 sandkeep shell --repo /path/to/repo
 
-sandkeep show <task_id>              # review the summary + patch
+sandkeep show <task_id>              # review summary + patch + risk flags + conflicts
 sandkeep accept <task_id>            # apply to a fresh branch on your repo
 # or
 sandkeep reject <task_id>            # discard and tear down the sandbox
+
+sandkeep skills list --repo /path/to/repo   # skills the agent authored for this repo
 ```
+
+Useful flags on `run`/`shell`:
+
+| Flag | Effect |
+|---|---|
+| `--agent <name>` | pick which agent runs in the sandbox (default `claude`; also `SANDKEEP_AGENT`) |
+| `--no-network` | run with **no network at all** (agent can't reach its API; for boundary testing / offline agents; also `SANDKEEP_NETWORK=none`) |
+| `--no-skip-permissions` | (`shell`) restore Claude Code permission prompts |
+| `--model <id>` | override the task-tier model |
 
 Two ways to run the agent: **`run`** (headless, fire-and-forget — good for
 unattended/CI) and **`shell`** (interactive — the full harness on a disposable
@@ -96,6 +107,23 @@ See [`examples/quickstart.md`](examples/quickstart.md) for an end-to-end first r
 2. **Run** — a headless Claude Code agent works only inside the sandbox, with a scoped tool set.
 3. **Extract** — only a patch + a structured results contract leave the sandbox.
 4. **Gate** — you review; on accept, Sandkeep applies the patch to a **fresh branch** on your repo. Nothing touches your working tree or `.git` until you say so.
+
+## What the gate shows you
+
+Every run lands at the human gate with more than just a diff:
+
+- **Diff risk flags** — changes touching sensitive surfaces are called out by category: `ci/workflow`, `deploy`, `auth`, `secret`, `dependency`. The secret check scans both file paths *and* added lines (Anthropic/AWS/GitHub tokens, private keys, hardcoded credentials). You see *what kind* of change you're approving, not just a file list.
+- **Cross-task conflicts** — if another task awaiting review touches the same files, the gate says so (and `accept` warns), so approving one can't silently collide with another in flight.
+
+It's advisory — the human still decides. Nothing auto-blocks, nothing auto-merges.
+
+## Pluggable agents
+
+The boundary is **agent-agnostic** — containment comes from the sandbox, not from which agent runs inside it. Agents live behind a single `AgentDriver` interface (`claude` is the built-in default), selectable with `--agent` / `SANDKEEP_AGENT`. Adding another CLI agent (e.g. Codex) is a small, contained change: register a driver and teach the image to install its CLI. An unknown agent fails loud on the host before any sandbox is created.
+
+## Capability authoring (per-repo skills)
+
+An agent can **author skills** while it works — small markdown capability files written under `.sandkeep/skills/`. These are sandkeep-managed metadata: they're **excluded from the patch** (they never land in your repo's working tree or `.git`), surfaced at the gate, and registered to a **per-repo store only when you `accept`**. On later runs against the same repo, stored skills are injected so the agent builds on what earlier runs learned. Inspect them with `sandkeep skills list --repo <path>`. Nothing the agent authored becomes durable without your gate.
 
 ## Extending it
 
@@ -130,10 +158,13 @@ the Docker dependency.
 ## Roadmap
 
 - [x] Phase 0 — boundary proof (Docker mechanics)
-- [ ] Phase 1 — single governed task loop
-- [ ] Phase 2 — microVM isolation, snapshots, parallelism, secret broker, draft-PR gate
-- [ ] Phase 3 — conflict detection, diff risk analysis
-- [ ] Phase 4 — per-repo skill authoring
+- [x] Phase 1 — single governed task loop (`run` + interactive `shell`, human gate)
+- [~] Phase 2 — real isolation + parallelism. **Done:** network-off toggle (`--no-network`). **Pending infra:** microVM backend, brokering egress-allowlist proxy, secret broker, draft-PR gate (need KVM/cloud/GitHub; deliberately not stubbed)
+- [x] Phase 3 — diff risk analysis + cross-task conflict detection
+- [x] Phase 4 — per-repo skill authoring
+- [x] Phase 5 — pluggable agents (`--agent`, `AgentDriver` seam)
+
+The build details for each phase live in [`BUILD_SPEC.md`](BUILD_SPEC.md) (§13–§16).
 
 ## Cordon — the native sibling
 
