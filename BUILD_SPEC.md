@@ -368,7 +368,7 @@ diff), printing the same accept/reject instructions as `run`.
 Leave `TODO(phase-N)` markers; do not implement until the phase is started.
 
 - **Phase 2 — Real isolation + parallelism:** microVM `SandboxProvider` (E2B / Firecracker / Docker Sandboxes); snapshot/restore; concurrency + warm pool; secret-injecting broker (agent never holds the key); proper brokering egress proxy; draft-PR human gate.
-- **Phase 3 — Coordination & policy:** cross-task conflict detection; test-gated merge queue; diff risk analysis (flag workflow/deploy/auth/secret/dep changes); richer `policy.py`.
+- **Phase 3 — Coordination & policy:** cross-task conflict detection; test-gated merge queue; diff risk analysis (flag workflow/deploy/auth/secret/dep changes); richer `policy.py`. Full status in §14. **Risk analysis + conflict detection implemented**; test-gated merge queue deferred (see §14).
 - **Phase 4 — Capability authoring:** agents author per-repo scoped skills inside their sandbox.
 - **Phase 5 — Pluggable agents:** the hardwired `claude` CLI becomes one `AgentDriver` among several (Codex, Aider, …); `--agent`/config selection; per-agent images; per-agent secret env; diff-only contract fallback for agents that don't write `results.json`. Full design + status in §13. **Core seam implemented**; two pieces deferred (see §13).
 
@@ -424,7 +424,37 @@ class AgentDriver(ABC):
 
 ---
 
-## 14. References
+## 14. Coordination & policy (Phase 3 — core implemented)
+
+> **Status.** Implemented: diff **risk analysis** and cross-task **conflict detection** (`src/sandkeep/policy.py`, `tests/test_policy.py`, controller + CLI wiring). **Deferred:** the **test-gated merge queue** — running the target repo's tests against a patch — because tests must run on agent-touched code, which the golden rule forbids on the host. It therefore needs a *sandboxed* test run (re-provision → apply patch → run a configured test command inside → gate on exit). That reuses Phase 1 provisioning but adds a per-repo test-command config; built when prioritized.
+
+`policy.py` is host-side and deterministic: it never runs agent code, it only reads the diff that already crossed back. It is **advisory** — it informs the human gate, it does not auto-block (the gate is still the human's call).
+
+### Diff risk analysis — `policy.analyze_patch(patch_text) -> list[RiskFlag]`
+
+Flags changes that touch sensitive surfaces, so the gate sees *what kind* of change it is approving:
+
+- **ci/workflow** — `.github/workflows/`, `.gitlab-ci.yml`, `Jenkinsfile`, …
+- **deploy** — `Dockerfile`, `docker-compose*`, `*.tf`, `Procfile`, `fly.toml`, `k8s/`, …
+- **auth** — paths matching `auth`, `login`, `session`, `permission`, `rbac`, `middleware`, …
+- **secret** — by path (`.env`, `*.pem`, `*.key`, `credential*`) **and** by content: added (`+`) lines matching key shapes (Anthropic/AWS/GitHub tokens, `PRIVATE KEY`, `password = "…"`). Removed lines never flag.
+- **dependency** — `requirements*.txt`, `pyproject.toml`, `package*.json`, lockfiles, `Cargo.*`, `go.*`, `Gemfile*`.
+
+Risk flags are logged (`policy_risk_flagged`) at land time and surfaced by `run`, `shell`, and `show`.
+
+### Cross-task conflict detection — `policy.find_conflicts(this_files, others)`
+
+When a task lands at REVIEW, `Controller.conflicts(task)` compares its changed files against every *other* task currently in REVIEW. Any file overlap is a `Conflict`, surfaced at the gate and warned about on `accept` (advisory — accepting one task can no longer silently collide with another awaiting review).
+
+### Acceptance (`test_policy.py`, `test_controller.py`)
+
+- Each risk category flags from a representative patch; a clean patch flags nothing; the secret scan catches an added hardcoded key but ignores removed lines; flags dedupe.
+- Conflicts detect file overlap and ignore disjoint/empty sets.
+- Docker-backed: a dependency-touching run is flagged and audited; two REVIEW tasks editing the same file are reported as conflicting.
+
+---
+
+## 15. References
 
 - Claude Code headless mode (flags, output formats, exit codes): https://docs.claude.com/en/docs/claude-code/overview and the headless/CI-CD docs. Re-verify `--max-turns`, `--allowedTools`, `--output-format json`, and the current model alias with `claude --help` at build time.
 - Design rationale, threat model, and the five-tier architecture: the Sandkeep v2 design doc.

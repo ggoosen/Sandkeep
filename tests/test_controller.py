@@ -176,3 +176,45 @@ def test_gate_rejects_wrong_state(controller, store, host_repo, monkeypatch):
         controller.accept(task.id)
     with pytest.raises(ControllerError):
         controller.reject(task.id)
+
+
+# -- Phase 3: coordination & policy surfaced at the gate -----------------
+
+
+def _do_risky_work(task, provider, handle) -> AgentRunResult:
+    """A well-behaved agent that happens to touch a dependency manifest."""
+    contract = json.dumps({
+        "task_id": task.id, "status": "succeeded",
+        "summary": "Bumped a dep.", "files_changed": ["requirements.txt"],
+    })
+    script = (
+        "echo 'requests==2.31.0' >> /work/repo/requirements.txt"
+        " && mkdir -p /work/repo/.sandkeep"
+        f" && echo {shlex.quote(contract)} > /work/repo/.sandkeep/results.json"
+    )
+    assert provider.exec(handle, ["sh", "-c", script], timeout=60).exit_code == 0
+    return _ok_result()
+
+
+def test_risk_flags_surface_and_are_audited(controller, store, host_repo, monkeypatch):
+    _stub_agent(monkeypatch, _do_risky_work)
+    task = controller.run_task(str(host_repo), "bump deps")
+    assert task.state is TaskState.REVIEW
+    flags = controller.risk_flags(task)
+    assert any(f.category == "dependency" for f in flags)
+    assert "policy_risk_flagged" in controller.audit.path.read_text()
+    controller.reject(task.id)
+
+
+def test_conflicts_detected_between_two_review_tasks(
+    controller, store, host_repo, monkeypatch
+):
+    _stub_agent(monkeypatch, _do_work)  # both edit parse_config.py
+    first = controller.run_task(str(host_repo), "first")
+    second = controller.run_task(str(host_repo), "second")
+    assert first.state is TaskState.REVIEW and second.state is TaskState.REVIEW
+    conflicts = controller.conflicts(second)
+    assert any(c.other_task_id == first.id for c in conflicts)
+    assert any("parse_config.py" in c.files for c in conflicts)
+    controller.reject(first.id)
+    controller.reject(second.id)

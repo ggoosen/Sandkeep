@@ -20,7 +20,7 @@ import time
 import uuid
 from pathlib import Path
 
-from . import agent_runner, diff, results
+from . import agent_runner, diff, policy, results
 from .agent import get_driver
 from .audit import AuditLog, new_trace_id
 from .config import Config, resource_path
@@ -288,10 +288,43 @@ class Controller:
         # contract JSON sits next to the patch for `sandkeep show`
         (self.config.outputs_dir / f"{task.id}.results.json").write_text(raw)
 
+        # Phase 3: assess the diff and log risk flags so the audit trail records
+        # what kind of change is heading to the gate (BUILD_SPEC §14).
+        flags = policy.analyze_patch(patch_path.read_text())
+        if flags:
+            self.audit.log(
+                "policy_risk_flagged",
+                trace_id=new_trace_id(), task_id=task.id,
+                flags=[{"category": f.category, "detail": f.detail} for f in flags],
+            )
+
         self.store.update_state(task.id, TaskState.SUCCEEDED, new_trace_id(), summary)
         self.store.update_state(
             task.id, TaskState.REVIEW, new_trace_id(), "awaiting human gate"
         )
+
+    # -- coordination & policy (Phase 3, read-only, host-side) ------------
+
+    def risk_flags(self, task: Task) -> list[policy.RiskFlag]:
+        """Risk flags for a task's patch (empty if no patch yet)."""
+        if not task.patch_path or not Path(task.patch_path).exists():
+            return []
+        return policy.analyze_patch(Path(task.patch_path).read_text())
+
+    def conflicts(self, task: Task) -> list[policy.Conflict]:
+        """Other tasks awaiting review whose patches touch the same files."""
+        if not task.patch_path or not Path(task.patch_path).exists():
+            return []
+        this_files = diff.files_in_patch(Path(task.patch_path).read_text())
+        others: dict[str, list[str]] = {}
+        for other in self.store.list_tasks():
+            if other.id == task.id or other.state is not TaskState.REVIEW:
+                continue
+            if other.patch_path and Path(other.patch_path).exists():
+                others[other.id] = diff.files_in_patch(
+                    Path(other.patch_path).read_text()
+                )
+        return policy.find_conflicts(this_files, others)
 
     # -- human gate --------------------------------------------------------
 
