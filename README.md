@@ -100,6 +100,23 @@ contract is strict: **any backend must pass the unmodified boundary test suite**
 - Docker (for the current sandbox backend)
 - An Anthropic API key (`ANTHROPIC_API_KEY`)
 
+## Platform support
+
+The controller is pure-stdlib Python and the sandbox is always a Linux
+container, so the host only needs Python, git, and a Docker daemon:
+
+| Platform | Status |
+|---|---|
+| **macOS** (Intel & Apple Silicon) | ✅ **Tested** — full suite, incl. the boundary tests, runs green |
+| **Linux** | ✅ Expected to work (native Docker; CI target) |
+| **Windows — WSL2** | ✅ Recommended path on Windows; effectively the Linux case |
+| **Windows — native** (PowerShell + Docker Desktop) | ⚠️ Untested. Likely works; known risk spots: drive-letter volume-mount syntax, TTY behaviour of `sandkeep shell`, and CRLF (`core.autocrlf`) rejecting sandbox-generated patches on `accept`. Issues welcome. |
+
+Note for corporate users: Docker Desktop itself requires a paid subscription
+above Docker's company-size thresholds (macOS and Windows). That's a Docker
+constraint, not a Sandkeep one; the planned microVM backend (Phase 2) removes
+the Docker dependency.
+
 ## Roadmap
 
 - [x] Phase 0 — boundary proof (Docker mechanics)
