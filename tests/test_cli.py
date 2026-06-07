@@ -109,6 +109,39 @@ def test_phase1_gate_reject_path(cli_env, host_repo, monkeypatch, capsys):
     assert _run_cli("reject", task_id) == 1  # already rejected
 
 
+def test_shell_gate_accept_path(cli_env, host_repo, monkeypatch, capsys):
+    """`sandkeep shell` end to end through the real CLI, TTY session stubbed."""
+    from sandkeep.sandbox.docker_provider import DockerProvider
+
+    def fake_interactive(self, handle, cmd):
+        subprocess.run(
+            ["docker", "exec", handle.id, "sh", "-c",
+             "echo '# via shell' >> /work/repo/parse_config.py"],
+            check=True,
+        )
+        return 0
+
+    monkeypatch.setattr(DockerProvider, "exec_interactive", fake_interactive)
+    assert _run_cli("shell", "--repo", str(host_repo), "--task", "tidy up") == 0
+    out = capsys.readouterr().out
+    match = re.search(r"task ([0-9a-f]{32}) is ready for review", out)
+    assert match, out
+    task_id = match.group(1)
+    assert _run_cli("accept", task_id) == 0
+    shown = subprocess.run(
+        ["git", "-C", str(host_repo), "show", f"sandkeep-accepted/{task_id}:parse_config.py"],
+        capture_output=True, text=True,
+    )
+    assert "# via shell" in shown.stdout
+
+
+def test_shell_requires_api_key(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("SANDKEEP_HOME", str(tmp_path / "skhome"))
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    assert _run_cli("shell", "--repo", ".") == 2
+    assert "ANTHROPIC_API_KEY" in capsys.readouterr().err
+
+
 def test_run_requires_api_key(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("SANDKEEP_HOME", str(tmp_path / "skhome"))
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)

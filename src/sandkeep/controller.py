@@ -13,6 +13,8 @@ never silently, on VIOLATION — and never re-dispatched.
 
 from __future__ import annotations
 
+import dataclasses
+import json
 import os
 import time
 import uuid
@@ -21,7 +23,7 @@ from pathlib import Path
 from . import agent_runner, diff, results
 from .audit import AuditLog, new_trace_id
 from .config import Config, resource_path
-from .models import Task, TaskState
+from .models import ResultsContract, Task, TaskState
 from .provisioner import ProvisioningError, provision
 from .sandbox.base import SandboxError, SandboxHandle, SandboxProvider
 from .state_store import StateStore
@@ -129,28 +131,126 @@ class Controller:
             self._fail(task, handle, f"agent reported status={contract.status}: {contract.summary}")
             return self.store.get_task(task.id)
 
+        in_tok, out_tok = agent_runner.usage_from_output(run.output)
+        self._land_in_review(
+            task, handle, raw, contract.summary,
+            usage=(in_tok, out_tok), sandbox_seconds=sandbox_seconds,
+        )
+        return self.store.get_task(task.id)
+
+    # -- the interactive session (Phase 1, `sandkeep shell`) --------------
+
+    def run_interactive(
+        self,
+        repo_path: str,
+        *,
+        instruction: str = "interactive session",
+        model: str | None = None,
+        seed: str | None = None,
+    ) -> Task:
+        """Provision the same sandbox, drop the user into an interactive
+        Claude Code session on the clone, and on exit land at REVIEW with a
+        host-synthesized contract — or roll back if nothing changed
+        (BUILD_SPEC §10b). Returns the task in its resulting state."""
+        self.config.ensure_dirs()
+        task = Task(
+            id=uuid.uuid4().hex,
+            repo_path=str(Path(repo_path).resolve()),
+            instruction=instruction,
+            model=model or self.config.model,
+        )
+        self.store.create_task(task, new_trace_id())
+
+        env = {}
+        api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+        if api_key:
+            env["ANTHROPIC_API_KEY"] = api_key
+
+        handle: SandboxHandle | None = None
+        started = time.monotonic()
+        try:
+            handle = provision(
+                task, self.provider, self.store, self.audit, env,
+                trace_id=new_trace_id(), exec_timeout=self.config.exec_timeout_seconds,
+            )
+        except (ProvisioningError, SandboxError) as exc:
+            self._fail(task, handle, f"provisioning failed: {exc}")
+            return self.store.get_task(task.id)
+        task.base_ref = self.store.get_task(task.id).base_ref
+
+        self.store.update_state(
+            task.id, TaskState.RUNNING, new_trace_id(), "interactive session started"
+        )
+        cmd = agent_runner.build_interactive_command(task, seed=seed)
+        exit_code = self.provider.exec_interactive(handle, cmd)
+        sandbox_seconds = time.monotonic() - started
+        self.audit.log(
+            "interactive_session_ended",
+            trace_id=new_trace_id(), task_id=task.id, exit_code=exit_code,
+        )
+
+        # No agent contract for an interactive run; the diff is the truth.
         try:
             patch_path = diff.extract_patch(
                 self.provider, handle, task, self.config.outputs_dir,
                 exec_timeout=self.config.exec_timeout_seconds,
             )
+        except diff.DiffError as exc:
+            self._fail(task, handle, f"could not extract diff: {exc}")
+            return self.store.get_task(task.id)
+
+        if patch_path.stat().st_size == 0:
+            self._fail(task, handle, "no changes made in the interactive session")
+            return self.store.get_task(task.id)
+
+        files = diff.files_in_patch(patch_path.read_text())
+        contract = ResultsContract(
+            task_id=task.id,
+            status="succeeded",
+            summary="Interactive Claude Code session.",
+            files_changed=files,
+        )
+        raw = json.dumps(dataclasses.asdict(contract))
+        self._land_in_review(
+            task, handle, raw, contract.summary,
+            usage=(0, 0), sandbox_seconds=sandbox_seconds, patch_path=patch_path,
+        )
+        return self.store.get_task(task.id)
+
+    def _land_in_review(
+        self,
+        task: Task,
+        handle: SandboxHandle,
+        raw: str,
+        summary: str,
+        *,
+        usage: tuple[int, int],
+        sandbox_seconds: float,
+        patch_path: Path | None = None,
+    ) -> None:
+        """Validate the patch, record cost + contract, transition
+        SUCCEEDED → REVIEW. Shared by the headless and interactive paths.
+        The sandbox stays up — it is the rollback target until accept/reject."""
+        try:
+            if patch_path is None:
+                patch_path = diff.extract_patch(
+                    self.provider, handle, task, self.config.outputs_dir,
+                    exec_timeout=self.config.exec_timeout_seconds,
+                )
             diff.validate_patch(task.repo_path, task.base_ref, patch_path)
         except diff.DiffError as exc:
             self._fail(task, handle, f"patch invalid: {exc}")
-            return self.store.get_task(task.id)
+            return
 
         self.store.update_fields(task.id, patch_path=str(patch_path))
-        in_tok, out_tok = agent_runner.usage_from_output(run.output)
-        self.store.record_cost(task.id, task.model, in_tok, out_tok, sandbox_seconds)
+        self.store.record_cost(task.id, task.model, usage[0], usage[1], sandbox_seconds)
         # contract JSON sits next to the patch for `sandkeep show`
         (self.config.outputs_dir / f"{task.id}.results.json").write_text(raw)
 
-        self.store.update_state(task.id, TaskState.SUCCEEDED, new_trace_id(), contract.summary)
+        self.store.update_state(task.id, TaskState.SUCCEEDED, new_trace_id(), summary)
         self.store.update_state(
             task.id, TaskState.REVIEW, new_trace_id(), "awaiting human gate"
         )
-        # the sandbox stays up (it is the rollback target) until accept/reject
-        return self.store.get_task(task.id)
 
     # -- human gate --------------------------------------------------------
 

@@ -105,3 +105,43 @@ def test_destroy_removes_container_and_volumes(provider, runner):
     cmd = runner.calls[0]
     assert cmd[:2] == ["docker", "rm"]
     assert "--force" in cmd and "--volumes" in cmd
+
+
+def test_exec_interactive_uses_tty_and_inherits_stdio(provider, monkeypatch):
+    """Interactive exec must request a TTY and NOT capture output (it shares
+    the host terminal) — it bypasses the injected runner on purpose."""
+    import subprocess as sp
+
+    captured = {}
+
+    def fake_run(cmd):  # note: no capture_output kwarg → inherits stdio
+        captured["cmd"] = cmd
+        return sp.CompletedProcess(cmd, 0)
+
+    monkeypatch.setattr(sp, "run", fake_run)
+    handle = SandboxHandle(id="sandkeep-test", workdir="/work/repo")
+    code = provider.exec_interactive(handle, ["sh", "-lc", "claude"])
+    assert code == 0
+    assert captured["cmd"][:5] == ["docker", "exec", "--interactive", "--tty", "sandkeep-test"]
+
+
+def test_exec_interactive_is_optional_on_base():
+    """A backend that doesn't override it reports the capability as absent
+    without affecting the core boundary contract."""
+    from sandkeep.sandbox.base import SandboxProvider
+
+    class Minimal(SandboxProvider):
+        def create(self, repo_path, env):
+            ...
+
+        def exec(self, handle, cmd, timeout):
+            ...
+
+        def read_file(self, handle, path):
+            ...
+
+        def destroy(self, handle):
+            ...
+
+    with pytest.raises(NotImplementedError):
+        Minimal().exec_interactive(SandboxHandle(id="x", workdir="/w"), ["claude"])

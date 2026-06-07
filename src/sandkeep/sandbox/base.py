@@ -48,6 +48,18 @@ class SandboxProvider(ABC):
     def exec(self, handle: SandboxHandle, cmd: list[str], timeout: int) -> ExecResult:
         """Run a command inside the sandbox."""
 
+    def exec_interactive(self, handle: SandboxHandle, cmd: list[str]) -> int:
+        """Run a command inside the sandbox attached to the host's TTY,
+        returning its exit code (BUILD_SPEC §10b, `sandkeep shell`).
+
+        Optional capability: backends that cannot offer an interactive TTY
+        may leave this unimplemented. The core boundary contract is
+        create/exec/read_file/destroy; this does not extend it, so existing
+        backends and tests/test_boundary.py are unaffected."""
+        raise NotImplementedError(
+            f"{type(self).__name__} does not support interactive sessions"
+        )
+
     @abstractmethod
     def read_file(self, handle: SandboxHandle, path: str) -> str:
         """Read a file from inside the sandbox (used to pull the contract + patch)."""

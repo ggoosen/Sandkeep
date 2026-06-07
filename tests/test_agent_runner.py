@@ -14,6 +14,7 @@ from sandkeep.agent_runner import (
     AUTH_ERROR_HINT,
     SYSTEM_PROMPT_PATH,
     build_command,
+    build_interactive_command,
     install_system_prompt,
     run_agent,
     usage_from_output,
@@ -63,6 +64,27 @@ def test_command_shape(task):
     # --max-turns was removed from the CLI (verified 2.1.168); never emit it
     assert "--max-turns" not in argv
     assert "--max-budget-usd" in argv
+
+
+def test_interactive_command_is_plain_claude(task):
+    cmd = build_interactive_command(task)
+    assert cmd[:2] == ["sh", "-lc"]
+    script = cmd[2]
+    assert script.startswith("cd /work/repo && exec claude")
+    # interactive: none of the headless flags belong here
+    for flag in ("-p", "--output-format", "--max-turns", "--max-budget-usd"):
+        assert flag not in script
+
+
+def test_interactive_command_seeds_first_message(task):
+    cmd = build_interactive_command(task, seed="fix the bug")
+    assert "claude 'fix the bug'" in cmd[2]
+
+
+def test_interactive_command_quotes_seed_safely(task):
+    cmd = build_interactive_command(task, seed="rm -rf / ; echo $HOME")
+    # the seed must be a single shell-quoted argument, not interpretable
+    assert "'rm -rf / ; echo $HOME'" in cmd[2]
 
 
 def test_prompt_carries_task_id_and_instruction(task):

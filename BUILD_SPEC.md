@@ -293,6 +293,57 @@ The human gate is local patch apply in Phase 1. `TODO(phase-2)`: draft PR.
 
 ---
 
+## 10b. Interactive session (`sandkeep shell`) — Phase 1
+
+The headless loop (§6–§10) is for *unattended* agents. `sandkeep shell` is the
+*interactive* counterpart: the user drives a normal, fully interactive Claude
+Code session — permission prompts, skills, MCP, plan mode, slash commands — but
+inside the **same sandbox** as the headless path, on the **same independent
+clone** of a read-only host repo. The point is to get the full Claude Code
+harness while keeping the one architectural invariant intact: the worktree
+lives inside the sandbox; only a diff comes back; the host repo is untouched
+until the human accepts.
+
+What is **identical** to the headless path (reused, not reimplemented):
+- Provisioning (§5): read-only `/src` mount → `git clone --no-hardlinks` →
+  task branch → base_ref pinned to a SHA.
+- Diff extraction + validation (§7): on session exit, stage everything in the
+  clone (excluding the `.sandkeep` channel), diff against the pinned base,
+  write `outputs/<task_id>.patch`, `git apply --check` on a fresh host checkout.
+- Human gate (§10): `show` / `accept` / `reject` work unchanged.
+- State machine (§9): `NEW → PROVISIONING → RUNNING → SUCCEEDED → REVIEW →
+  MERGED | REJECTED`, with the same failure/rollback edges.
+
+What is **different** from the headless path:
+- **TTY, not capture.** The agent runs via an interactive exec that inherits
+  the host's stdio (`docker exec -it … claude`). The provider exposes an
+  optional `exec_interactive(handle, cmd) -> int`; backends that cannot offer
+  a TTY raise `NotImplementedError` (the boundary contract — create/exec/
+  read_file/destroy — is unchanged, so existing backends and `test_boundary.py`
+  are unaffected).
+- **No `-p`, no `--output-format json`, no `--max-turns`.** The interactive
+  `claude` invocation is plain; an optional `--task` seeds the first message.
+  Built only in `agent_runner.py` (`build_interactive_command`), same as the
+  headless command.
+- **No agent-written results contract.** There is no `.sandkeep/results.json`
+  (the human was in the loop). The controller **synthesizes** a
+  `ResultsContract` host-side from the extracted patch (`files_changed` from the
+  diff, a generic interactive summary) so `show`/`accept` stay uniform.
+- **Output-scanning violation detection (§8) does not apply** — the session is
+  a live TTY, not a captured transcript. Containment still rests entirely on
+  the sandbox boundary (read-only mount, network policy, caps), which is the
+  real protection; the output scan was always only a heuristic.
+- **An empty diff** (the user changed nothing) is not an error: transition
+  `RUNNING → FAILED → ROLLED_BACK` with detail "no changes" and destroy the
+  sandbox. Nothing to review.
+
+`sandkeep shell --repo <path> [--task "<seed>"] [--model ...]` provisions with
+egress enabled (the interactive agent needs `api.anthropic.com`), drops the
+user into the session, and on exit lands at `REVIEW` (or rolls back on empty
+diff), printing the same accept/reject instructions as `run`.
+
+---
+
 ## 11. Phase gates (definition of done)
 
 **Phase 0 — Boundary proof.** `tests/test_boundary.py` must pass. The sandbox runs `claude -p`, produces a diff, and the diff extracts cleanly; AND the adversarial cases below are all caught and archived, never executed against the host:
@@ -304,6 +355,8 @@ The human gate is local patch apply in Phase 1. `TODO(phase-2)`: draft PR.
 - Confirm snapshot/rollback-equivalent: destroying the sandbox leaves the host repo byte-for-byte unchanged.
 
 **Phase 1 — Single governed loop.** End to end on a real local repo: `sandkeep run` → `REVIEW` with a valid contract + applicable patch; `sandkeep accept` lands it on a fresh host branch; `sandkeep reject` discards cleanly. Ledger has a cost row. Audit log has the full transition chain.
+
+**Phase 1 (interactive) — `sandkeep shell`.** End to end on a real local repo: provision the same sandbox, run an interactive Claude Code session on the clone, and on exit reach `REVIEW` with a synthesized contract + an applicable patch (or `ROLLED_BACK` "no changes" on an empty diff); `accept`/`reject` behave exactly as the headless path. The interactive command carries no `-p`/`--output-format`/`--max-turns`; the host repo is byte-for-byte unchanged until accept.
 
 ---
 

@@ -79,6 +79,20 @@ def build_command(task: Task, *, max_budget_usd: str | None = "5.00") -> str:
     return f"cd {WORKDIR} && " + shlex.join(parts)
 
 
+def build_interactive_command(task: Task, *, seed: str | None = None) -> list[str]:
+    """The argv for an interactive `sandkeep shell` session (BUILD_SPEC §10b).
+
+    Plain interactive claude — NO -p, NO --output-format, NO --max-turns. The
+    user is in the loop, so there is no headless contract. An optional seed
+    becomes the first message. Returned as argv (not a shell string) because
+    it is handed to `docker exec -it`, not a shell.
+    """
+    inner = "claude"
+    if seed:
+        inner += f" {shlex.quote(seed)}"
+    return ["sh", "-lc", f"cd {WORKDIR} && exec {inner}"]
+
+
 def install_system_prompt(
     provider: SandboxProvider, handle: SandboxHandle, content: str, *, timeout: int = 30
 ) -> None:

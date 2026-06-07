@@ -34,8 +34,12 @@ Do not add a web framework, message queue, or cloud SDK in Phase 0–1. Keep dep
 # build the sandbox image once
 sandkeep image build
 
-# run a single task against a local repo
+# run a single UNATTENDED task against a local repo
 sandkeep run --repo /path/to/target-repo --task "Add input validation to parse_config()"
+
+# OR: open an INTERACTIVE Claude Code session inside the sandbox (full harness),
+# on an independent clone of the read-only repo; on exit it lands at the review gate
+sandkeep shell --repo /path/to/target-repo            # optionally: --task "<seed first message>"
 
 # inspect a task
 sandkeep status <task_id>
@@ -72,4 +76,6 @@ Flag these in code with the exact `TODO(phase-N)` markers so they're greppable.
 
 ## What "good" looks like for a task run
 
-provision read-only-mounted repo → independent clone on a task branch inside the sandbox → run the headless agent with scoped tools → agent writes the results contract → extract the patch → validate → present to the human gate → on accept, apply to a fresh host branch; on reject/violation, archive and discard the sandbox. Nothing touches the host repo's working tree or `.git` until the human accepts.
+**Headless (`sandkeep run`):** provision read-only-mounted repo → independent clone on a task branch inside the sandbox → run the headless agent with scoped tools → agent writes the results contract → extract the patch → validate → present to the human gate → on accept, apply to a fresh host branch; on reject/violation, archive and discard the sandbox. Nothing touches the host repo's working tree or `.git` until the human accepts.
+
+**Interactive (`sandkeep shell`):** same provisioning and same review gate, but the user drives a full interactive Claude Code session (TTY) on the clone instead of a captured headless run. No agent-written results contract — the controller synthesizes one host-side from the extracted patch. Output-scanning violation detection (§8) does not apply to a live TTY; containment rests on the sandbox boundary. Empty diff → rolled back as "no changes". See `BUILD_SPEC.md` §10b.

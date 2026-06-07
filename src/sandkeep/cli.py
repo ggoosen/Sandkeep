@@ -69,6 +69,30 @@ def _cmd_run(cfg: Config, args: argparse.Namespace) -> int:
     return 1
 
 
+def _cmd_shell(cfg: Config, args: argparse.Namespace) -> int:
+    if not os.environ.get("ANTHROPIC_API_KEY"):
+        print("error: ANTHROPIC_API_KEY is not set", file=sys.stderr)
+        return 2
+    print(SECURITY_BANNER, file=sys.stderr)
+    print("provisioning sandbox — your repo is mounted read-only, work happens "
+          "on a clone inside\n", file=sys.stderr)
+    # interactive agent needs egress to api.anthropic.com (gated on purpose;
+    # TODO(phase-2): brokering egress proxy)
+    controller = _make_controller(cfg, network="egress")
+    task = controller.run_interactive(args.repo, model=args.model, seed=args.task)
+    if task.state is TaskState.REVIEW:
+        print(f"\nsession ended — task {task.id} is ready for review")
+        print(f"  patch: {task.patch_path}")
+        print(f"\n  sandkeep show   {task.id}")
+        print(f"  sandkeep accept {task.id}   # apply to a fresh branch")
+        print(f"  sandkeep reject {task.id}   # discard")
+        return 0
+    last = controller.store.get_transitions(task.id)[-1]
+    print(f"\ntask {task.id} ended in state: {task.state.value} ({last['detail']})",
+          file=sys.stderr)
+    return 1
+
+
 def _cmd_status(cfg: Config, args: argparse.Namespace) -> int:
     controller = _make_controller(cfg, network="none")
     task = controller.store.get_task(args.task_id)
@@ -124,6 +148,15 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--model", default=None)
     run.add_argument("--max-turns", type=int, default=None)
 
+    shell = sub.add_parser(
+        "shell", help="open an interactive Claude Code session inside a sandbox"
+    )
+    shell.add_argument("--repo", required=True, help="path to the target git repo")
+    shell.add_argument(
+        "--task", default=None, help="optional seed for the agent's first message"
+    )
+    shell.add_argument("--model", default=None)
+
     for name in ("status", "show", "accept", "reject"):
         p = sub.add_parser(name)
         p.add_argument("task_id")
@@ -139,6 +172,7 @@ def main(argv: list[str] | None = None) -> int:
             return _cmd_image_build(cfg, args)
         handler = {
             "run": _cmd_run,
+            "shell": _cmd_shell,
             "status": _cmd_status,
             "show": _cmd_show,
             "accept": _cmd_accept,

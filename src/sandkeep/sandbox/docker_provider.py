@@ -96,6 +96,16 @@ class DockerProvider(SandboxProvider):
             stderr=proc.stderr.decode(errors="replace"),
         )
 
+    def exec_interactive(self, handle: SandboxHandle, cmd: list[str]) -> int:
+        """`docker exec -it` inheriting the host TTY (BUILD_SPEC §10b).
+
+        Deliberately does NOT go through self._run / capture_output: an
+        interactive session must share the real terminal. Returns the
+        command's exit code."""
+        full = ["docker", "exec", "--interactive", "--tty", handle.id, *cmd]
+        # stdin/stdout/stderr inherited from the parent process → live TTY
+        return subprocess.run(full).returncode
+
     def read_file(self, handle: SandboxHandle, path: str) -> str:
         result = self.exec(handle, ["cat", path], timeout=30)
         if result.exit_code != 0:
