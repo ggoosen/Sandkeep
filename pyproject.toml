@@ -28,7 +28,7 @@ dependencies = []
 dev = ["pytest>=8", "ruff>=0.6"]
 
 [project.scripts]
-sandkeep = "sandkeep.cli:main"
+sandkeep = "sandkeep.cli:entrypoint"
 
 [project.urls]
 Homepage = "https://github.com/<your-org>/sandkeep"
