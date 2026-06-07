@@ -94,6 +94,36 @@ def scan_exec(
     return found
 
 
+def scan_agent_output(stdout: str, stderr: str, *, network_denied: bool = False) -> list[Violation]:
+    """Scan a finished agent run's output for boundary-breach evidence.
+    Coarser than scan_exec — the agent's individual commands are not
+    visible from the host, only its transcript. TODO(phase-2): proper
+    egress proxy gives per-connection ground truth."""
+    text = (stdout + "\n" + stderr).lower()
+    found: list[Violation] = []
+    for marker in _ESCAPE_MARKERS:
+        if marker in text:
+            found.append(
+                Violation(ViolationKind.ESCAPE, f"escape marker in agent output: {marker}")
+            )
+            break
+    if "/src" in text:
+        for marker in _READONLY_SRC_MARKERS:
+            if marker in text and "/src" in text:
+                found.append(
+                    Violation(ViolationKind.FILESYSTEM, "write attempt on read-only /src in agent output")
+                )
+                break
+    if network_denied:
+        for marker in _NETWORK_FAILURE_MARKERS:
+            if marker in text:
+                found.append(
+                    Violation(ViolationKind.NETWORK, "egress attempt under deny policy in agent output")
+                )
+                break
+    return found
+
+
 def archive_sandbox(
     provider: SandboxProvider,
     handle: SandboxHandle,
