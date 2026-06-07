@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
-authors = [{ name = "<your name>", email = "<you@your-domain>" }]
+authors = [{ name = "George Goosen", email = "info@elusivecoffee.com.au" }]
 keywords = ["claude", "agents", "sandbox", "isolation", "orchestration", "llm"]
 classifiers = [
     "Development Status :: 3 - Alpha",
