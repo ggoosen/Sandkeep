@@ -369,7 +369,7 @@ Leave `TODO(phase-N)` markers; do not implement until the phase is started.
 
 - **Phase 2 — Real isolation + parallelism:** microVM `SandboxProvider` (E2B / Firecracker / Docker Sandboxes); snapshot/restore; concurrency + warm pool; secret-injecting broker (agent never holds the key); proper brokering egress proxy; draft-PR human gate.
 - **Phase 3 — Coordination & policy:** cross-task conflict detection; test-gated merge queue; diff risk analysis (flag workflow/deploy/auth/secret/dep changes); richer `policy.py`. Full status in §14. **Risk analysis + conflict detection implemented**; test-gated merge queue deferred (see §14).
-- **Phase 4 — Capability authoring:** agents author per-repo scoped skills inside their sandbox.
+- **Phase 4 — Capability authoring:** agents author per-repo scoped skills inside their sandbox. Full status in §15. **Implemented** (authoring, per-repo store, injection).
 - **Phase 5 — Pluggable agents:** the hardwired `claude` CLI becomes one `AgentDriver` among several (Codex, Aider, …); `--agent`/config selection; per-agent images; per-agent secret env; diff-only contract fallback for agents that don't write `results.json`. Full design + status in §13. **Core seam implemented**; two pieces deferred (see §13).
 
 ---
@@ -454,7 +454,31 @@ When a task lands at REVIEW, `Controller.conflicts(task)` compares its changed f
 
 ---
 
-## 15. References
+## 15. Capability authoring (Phase 4 — implemented)
+
+> **Status.** Implemented (`src/sandkeep/skills.py`, `tests/test_skills.py`, controller + CLI wiring). An agent authors skills; they persist per repo and are injected on later runs. The skill *format* is intentionally minimal (frontmatter `name` + `description`); richer validation/versioning can follow.
+
+An agent can author **per-repo scoped skills** inside its sandbox — small markdown capability files (frontmatter `name`/`description` + body) written under `.sandkeep/skills/` in the clone.
+
+**Return-channel discipline.** `.sandkeep/skills/` is **excluded from the patch** (`diff.py`), so authored skills are sandkeep-managed *metadata*, never changes to the user's repo — they never touch the host working tree or `.git`. The controller reads them from the sandbox at land time (`skills.read_authored`, a gated read in sandkeep's own namespace, **still subject to the human gate**), saves them to a host sidecar (`outputs/<task_id>.skills/`) for the gate to display, and **registers them in a per-repo store only on `accept`**. So nothing the agent authored becomes durable without human approval — the golden-rule intent holds, even though skills travel beside the patch rather than in it.
+
+**Lifecycle:**
+1. **Author** — agent writes `.sandkeep/skills/<name>.md` in the clone.
+2. **Capture** — at land, `read_authored` pulls + validates them; malformed files are audited (`skill_invalid`), not dropped silently; valid ones are surfaced at the gate (`run`/`shell`/`show`) and audited (`skills_authored`).
+3. **Register** — on `accept`, `SkillStore(home, repo).save_all(...)` persists them under `<home>/skills/<repo_key>/` (`skills_registered`).
+4. **Inject** — on the next run against that repo, stored skills are pushed to `.claude/skills/<name>/SKILL.md` so the agent's Claude Code loads them (`skills_injected`). That inject target is also excluded from the patch so injection never pollutes a returned diff.
+
+CLI: `sandkeep skills list --repo <path>` shows a repo's registered skills.
+
+### Acceptance (`test_skills.py`)
+
+- Parsing accepts a valid skill; rejects missing frontmatter / missing or invalid `name`.
+- Store round-trips and is scoped per repo.
+- Docker-backed: an authored skill is **excluded from the patch** yet captured for the gate; `accept` registers it in the repo store; the next run injects it at the Claude Code skill path and audits `skills_injected`.
+
+---
+
+## 16. References
 
 - Claude Code headless mode (flags, output formats, exit codes): https://docs.claude.com/en/docs/claude-code/overview and the headless/CI-CD docs. Re-verify `--max-turns`, `--allowedTools`, `--output-format json`, and the current model alias with `claude --help` at build time.
 - Design rationale, threat model, and the five-tier architecture: the Sandkeep v2 design doc.

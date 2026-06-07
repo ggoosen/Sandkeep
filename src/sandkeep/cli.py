@@ -13,6 +13,7 @@ import json
 import os
 import sys
 
+from . import skills
 from .agent import UnknownAgent, available_agents, get_driver
 from .audit import AuditLog
 from .config import DEFAULT_AGENT, Config, load_api_key, resource_path, stored_api_key
@@ -83,6 +84,11 @@ def _print_policy(controller: Controller, task) -> None:
         print("\n  ⚠ conflicts — other tasks in review touch the same files:")
         for c in conflicts:
             print(f"      {c.other_task_id}: {', '.join(c.files)}")
+    authored = controller.authored_skills(task)
+    if authored:
+        print("\n  ✎ skills authored (registered for this repo on accept):")
+        for s in authored:
+            print(f"      {s.name} — {s.description}")
 
 
 def _cmd_auth(cfg: Config, args: argparse.Namespace) -> int:
@@ -201,6 +207,20 @@ def _cmd_shell(cfg: Config, args: argparse.Namespace) -> int:
     return 1
 
 
+def _cmd_skills(cfg: Config, args: argparse.Namespace) -> int:
+    if args.skills_command == "list":
+        store = skills.SkillStore(cfg.home, args.repo)
+        items = store.list()
+        if not items:
+            print(f"no skills stored for {args.repo}")
+            return 0
+        print(f"skills for {args.repo}:")
+        for s in items:
+            print(f"  {s.name} — {s.description}")
+        return 0
+    return 1
+
+
 def _cmd_status(cfg: Config, args: argparse.Namespace) -> int:
     controller = _make_controller(cfg, network="none")
     task = controller.store.get_task(args.task_id)
@@ -302,6 +322,11 @@ def build_parser() -> argparse.ArgumentParser:
              "the session runs inside the sandbox)",
     )
 
+    sk = sub.add_parser("skills", help="manage per-repo authored skills")
+    sk_sub = sk.add_subparsers(dest="skills_command", required=True)
+    sk_list = sk_sub.add_parser("list", help="list skills authored for a repo")
+    sk_list.add_argument("--repo", required=True, help="path to the target git repo")
+
     for name in ("status", "show", "accept", "reject"):
         p = sub.add_parser(name)
         p.add_argument("task_id")
@@ -320,6 +345,7 @@ def main(argv: list[str] | None = None) -> int:
         handler = {
             "run": _cmd_run,
             "shell": _cmd_shell,
+            "skills": _cmd_skills,
             "status": _cmd_status,
             "show": _cmd_show,
             "accept": _cmd_accept,

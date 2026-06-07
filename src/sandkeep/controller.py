@@ -20,7 +20,7 @@ import time
 import uuid
 from pathlib import Path
 
-from . import agent_runner, diff, policy, results
+from . import agent_runner, diff, policy, results, skills
 from .agent import get_driver
 from .audit import AuditLog, new_trace_id
 from .config import Config, resource_path
@@ -94,6 +94,7 @@ class Controller:
             self._fail(task, handle, f"provisioning failed: {exc}")
             return self.store.get_task(task.id)
         task.base_ref = self.store.get_task(task.id).base_ref  # pinned SHA
+        self._inject_repo_skills(handle, task)
 
         self.store.update_state(task.id, TaskState.RUNNING, new_trace_id(), "agent dispatched")
         if driver.produces_contract:
@@ -187,6 +188,7 @@ class Controller:
             self._fail(task, handle, f"provisioning failed: {exc}")
             return self.store.get_task(task.id)
         task.base_ref = self.store.get_task(task.id).base_ref
+        self._inject_repo_skills(handle, task)
 
         self.store.update_state(
             task.id, TaskState.RUNNING, new_trace_id(), "interactive session started"
@@ -288,14 +290,36 @@ class Controller:
         # contract JSON sits next to the patch for `sandkeep show`
         (self.config.outputs_dir / f"{task.id}.results.json").write_text(raw)
 
+        patch_text = patch_path.read_text()
         # Phase 3: assess the diff and log risk flags so the audit trail records
         # what kind of change is heading to the gate (BUILD_SPEC §14).
-        flags = policy.analyze_patch(patch_path.read_text())
+        flags = policy.analyze_patch(patch_text)
         if flags:
             self.audit.log(
                 "policy_risk_flagged",
                 trace_id=new_trace_id(), task_id=task.id,
                 flags=[{"category": f.category, "detail": f.detail} for f in flags],
+            )
+        # Phase 4: capture skills the agent authored — sandkeep metadata read
+        # from the sandbox (excluded from the patch), saved to a host sidecar so
+        # the gate can show them and accept can register them (BUILD_SPEC §15).
+        try:
+            authored = skills.read_authored(
+                self.provider, handle, timeout=self.config.exec_timeout_seconds
+            )
+        except skills.SkillError as exc:
+            authored = []
+            self.audit.log(
+                "skill_invalid", trace_id=new_trace_id(), task_id=task.id, error=str(exc)
+            )
+        if authored:
+            sidecar = self.config.outputs_dir / f"{task.id}.skills"
+            sidecar.mkdir(parents=True, exist_ok=True)
+            for s in authored:
+                (sidecar / s.filename).write_text(s.text)
+            self.audit.log(
+                "skills_authored", trace_id=new_trace_id(), task_id=task.id,
+                names=[s.name for s in authored],
             )
 
         self.store.update_state(task.id, TaskState.SUCCEEDED, new_trace_id(), summary)
@@ -326,6 +350,34 @@ class Controller:
                 )
         return policy.find_conflicts(this_files, others)
 
+    # -- capability authoring (Phase 4) -----------------------------------
+
+    def _inject_repo_skills(self, handle: SandboxHandle, task: Task) -> None:
+        """Push this repo's stored skills into the sandbox before the agent
+        runs, so it can build on previously-authored capabilities."""
+        stored = skills.SkillStore(self.config.home, task.repo_path).list()
+        if not stored:
+            return
+        skills.inject(
+            self.provider, handle, stored,
+            timeout=self.config.exec_timeout_seconds,
+        )
+        self.audit.log(
+            "skills_injected", trace_id=new_trace_id(), task_id=task.id,
+            names=[s.name for s in stored],
+        )
+
+    def authored_skills(self, task: Task) -> list[skills.Skill]:
+        """Skills a task authored, from the host sidecar captured at land time
+        (empty if none)."""
+        sidecar = self.config.outputs_dir / f"{task.id}.skills"
+        if not sidecar.is_dir():
+            return []
+        return [
+            skills.parse_skill(p.read_text(), source=str(p))
+            for p in sorted(sidecar.glob("*.md"))
+        ]
+
     # -- human gate --------------------------------------------------------
 
     def accept(self, task_id: str) -> str:
@@ -341,6 +393,15 @@ class Controller:
         self.store.update_state(
             task.id, TaskState.MERGED, new_trace_id(), f"applied to {branch} @ {sha}"
         )
+        # Phase 4: register the skills this task authored, scoped to the repo,
+        # so future runs against it inherit the learned capabilities.
+        authored = self.authored_skills(task)
+        if authored:
+            skills.SkillStore(self.config.home, task.repo_path).save_all(authored)
+            self.audit.log(
+                "skills_registered", trace_id=new_trace_id(), task_id=task.id,
+                names=[s.name for s in authored],
+            )
         self._destroy_quietly(task)
         return sha
 
