@@ -147,6 +147,7 @@ class Controller:
         instruction: str = "interactive session",
         model: str | None = None,
         seed: str | None = None,
+        skip_permissions: bool = True,
     ) -> Task:
         """Provision the same sandbox, drop the user into an interactive
         Claude Code session on the clone, and on exit land at REVIEW with a
@@ -181,7 +182,9 @@ class Controller:
         self.store.update_state(
             task.id, TaskState.RUNNING, new_trace_id(), "interactive session started"
         )
-        cmd = agent_runner.build_interactive_command(task, seed=seed)
+        cmd = agent_runner.build_interactive_command(
+            task, seed=seed, skip_permissions=skip_permissions
+        )
         exit_code = self.provider.exec_interactive(handle, cmd)
         sandbox_seconds = time.monotonic() - started
         self.audit.log(

@@ -79,15 +79,24 @@ def build_command(task: Task, *, max_budget_usd: str | None = "5.00") -> str:
     return f"cd {WORKDIR} && " + shlex.join(parts)
 
 
-def build_interactive_command(task: Task, *, seed: str | None = None) -> list[str]:
+def build_interactive_command(
+    task: Task, *, seed: str | None = None, skip_permissions: bool = True
+) -> list[str]:
     """The argv for an interactive `sandkeep shell` session (BUILD_SPEC §10b).
 
     Plain interactive claude — NO -p, NO --output-format, NO --max-turns. The
     user is in the loop, so there is no headless contract. An optional seed
     becomes the first message. Returned as argv (not a shell string) because
     it is handed to `docker exec -it`, not a shell.
+
+    `--dangerously-skip-permissions` is on by default, matching the headless
+    path: both run INSIDE the sandbox, so the permission prompts add friction
+    without adding a boundary. The opt-out (`--no-skip-permissions` on the CLI)
+    restores prompts for users who want them. Never use this flag on the host.
     """
     inner = "claude"
+    if skip_permissions:
+        inner += " --dangerously-skip-permissions"
     if seed:
         inner += f" {shlex.quote(seed)}"
     return ["sh", "-lc", f"cd {WORKDIR} && exec {inner}"]

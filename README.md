@@ -79,6 +79,15 @@ unattended/CI) and **`shell`** (interactive — the full harness on a disposable
 clone). Both end at the same human gate; nothing touches your real repo until
 you `accept`.
 
+**Permissions are skipped by default.** Both `run` and `shell` launch Claude
+Code with `--dangerously-skip-permissions`, so the agent never stops to ask you
+to approve a tool call. This is deliberate: the session runs **inside the
+sandbox** on a throwaway clone, so the permission prompt would only add friction
+without adding a boundary — the containment is the boundary. To restore the
+prompts in an interactive session, run `sandkeep shell --no-skip-permissions`.
+(This flag is host-dangerous and is only ever used *inside* the sandbox — never
+on your machine.)
+
 See [`examples/quickstart.md`](examples/quickstart.md) for an end-to-end first run on a throwaway repo.
 
 ## How it works

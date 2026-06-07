@@ -136,7 +136,10 @@ def _cmd_shell(cfg: Config, args: argparse.Namespace) -> int:
     # interactive agent needs egress to api.anthropic.com (gated on purpose;
     # TODO(phase-2): brokering egress proxy)
     controller = _make_controller(cfg, network="egress")
-    task = controller.run_interactive(args.repo, model=args.model, seed=args.task)
+    task = controller.run_interactive(
+        args.repo, model=args.model, seed=args.task,
+        skip_permissions=args.skip_permissions,
+    )
     if task.state is TaskState.REVIEW:
         print(f"\nsession ended — task {task.id} is ready for review")
         print(f"  patch: {task.patch_path}")
@@ -219,6 +222,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--task", default=None, help="optional seed for the agent's first message"
     )
     shell.add_argument("--model", default=None)
+    shell.add_argument(
+        "--no-skip-permissions",
+        dest="skip_permissions",
+        action="store_false",
+        help="restore Claude Code permission prompts (default: skipped, since "
+             "the session runs inside the sandbox)",
+    )
 
     for name in ("status", "show", "accept", "reject"):
         p = sub.add_parser(name)

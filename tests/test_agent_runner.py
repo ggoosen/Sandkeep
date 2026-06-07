@@ -71,14 +71,27 @@ def test_interactive_command_is_plain_claude(task):
     assert cmd[:2] == ["sh", "-lc"]
     script = cmd[2]
     assert script.startswith("cd /work/repo && exec claude")
-    # interactive: none of the headless flags belong here
+    # interactive: none of the headless flags belong here (token-precise so we
+    # don't false-match e.g. "-p" inside "--dangerously-skip-permissions")
+    tokens = script.split()
     for flag in ("-p", "--output-format", "--max-turns", "--max-budget-usd"):
-        assert flag not in script
+        assert flag not in tokens
+
+
+def test_interactive_command_skips_permissions_by_default(task):
+    # matches the headless path: both run inside the sandbox, so prompts add
+    # friction without adding a boundary.
+    assert "--dangerously-skip-permissions" in build_interactive_command(task)[2]
+
+
+def test_interactive_command_can_restore_permission_prompts(task):
+    script = build_interactive_command(task, skip_permissions=False)[2]
+    assert "--dangerously-skip-permissions" not in script
 
 
 def test_interactive_command_seeds_first_message(task):
     cmd = build_interactive_command(task, seed="fix the bug")
-    assert "claude 'fix the bug'" in cmd[2]
+    assert "'fix the bug'" in cmd[2]
 
 
 def test_interactive_command_quotes_seed_safely(task):
