@@ -14,6 +14,9 @@ DEFAULT_MODEL = "claude-sonnet-4-6"
 DEFAULT_AGENT = "claude"
 DEFAULT_NETWORK = "egress"  # "egress" (bridge) | "none" (no network at all)
 NETWORK_MODES = ("egress", "none")
+DEFAULT_BACKEND = "docker"  # "docker" (Phase 0–1 harness) | "e2b" (microVM, Phase 2)
+BACKENDS = ("docker", "e2b")
+DEFAULT_E2B_TEMPLATE = "sandkeep"
 DEFAULT_MAX_TURNS = 8
 DEFAULT_TASK_TIMEOUT_SECONDS = 1800  # wall-clock cap for the agent run
 DEFAULT_EXEC_TIMEOUT_SECONDS = 120  # cap for individual sandbox exec calls
@@ -31,6 +34,8 @@ class Config:
     model: str = DEFAULT_MODEL
     agent: str = DEFAULT_AGENT
     network: str = DEFAULT_NETWORK
+    backend: str = DEFAULT_BACKEND
+    e2b_template: str = DEFAULT_E2B_TEMPLATE
     max_turns: int = DEFAULT_MAX_TURNS
     task_timeout_seconds: int = DEFAULT_TASK_TIMEOUT_SECONDS
     exec_timeout_seconds: int = DEFAULT_EXEC_TIMEOUT_SECONDS
@@ -46,6 +51,12 @@ class Config:
             raise ValueError(
                 f"SANDKEEP_NETWORK must be one of {NETWORK_MODES}, got {cfg.network!r}"
             )
+        cfg.backend = os.environ.get("SANDKEEP_BACKEND", cfg.backend)
+        if cfg.backend not in BACKENDS:
+            raise ValueError(
+                f"SANDKEEP_BACKEND must be one of {BACKENDS}, got {cfg.backend!r}"
+            )
+        cfg.e2b_template = os.environ.get("SANDKEEP_E2B_TEMPLATE", cfg.e2b_template)
         if "SANDKEEP_MAX_TURNS" in os.environ:
             cfg.max_turns = int(os.environ["SANDKEEP_MAX_TURNS"])
         if "SANDKEEP_TASK_TIMEOUT" in os.environ:

@@ -69,6 +69,12 @@ reaches the host. A microVM gives each task its own kernel + hardware-virtualize
 isolation — the jump from "contains accidents and prompt injection" to "contains
 a determined adversary."
 
+> **A candidate E2B provider already ships:** `src/sandkeep/sandbox/e2b_provider.py`,
+> selectable with `SANDKEEP_BACKEND=e2b`. It is **written but NOT yet verified** —
+> nobody has run the boundary suite against it. See **[Verifying the E2B backend](#verifying-the-e2b-backend)**
+> below for the exact steps to take it from candidate → verified. The sketch
+> beneath is the design rationale; the real code is in that module.
+
 **Recommended path: E2B** (managed Firecracker microVMs — no infra to run
 yourself). Firecracker-direct or Cloud Hypervisor are the self-hosted
 alternatives if you have bare metal with `/dev/kvm`.
@@ -123,6 +129,52 @@ class E2BProvider(SandboxProvider):
 
 **Definition of done:** `pytest tests/test_boundary.py` green with the `provider`
 fixture pointed at `E2BProvider`; `sandkeep run` works end to end against it.
+
+### Verifying the E2B backend
+
+The provider is written and wired; what's left is the part that needs an account.
+**What you need to get:**
+
+1. **An E2B account + API key** — sign up at e2b.dev, create an API key.
+2. **The E2B CLI** — `npm install -g @e2b/cli` (used to build the template).
+3. **Build the sandbox template** from the provided Dockerfile (node + claude +
+   git + mise, non-root):
+   ```bash
+   cd sandbox_image
+   e2b template build --name sandkeep --dockerfile e2b.Dockerfile
+   ```
+   (Name it `sandkeep`, or set `SANDKEEP_E2B_TEMPLATE` to whatever you call it.)
+4. **Install the optional dep** — `pip install 'sandkeep[e2b]'`.
+
+**Then verify — this is the step I can't do without the key:**
+
+```bash
+export E2B_API_KEY=e2b_...
+# the acceptance gate: run the SAME hostile-agent suite against the microVM
+SANDKEEP_TEST_BACKEND=e2b pytest tests/test_boundary.py -v
+```
+
+- **All green** → the microVM contains a hostile agent. It's verified; flip the
+  "NOT YET VERIFIED" banner in `e2b_provider.py` and you have real containment.
+- **A test fails** → it tells you exactly which guarantee isn't met. The likely
+  ones and their fixes:
+  - *`/src` writable / `.git` writable* → the template is running as **root**;
+    ensure it runs non-root (the provided `e2b.Dockerfile` adds a `sandkeep`
+    user — confirm E2B honours `USER`).
+  - *network exfil succeeds* → expected; E2B has internet by default and the
+    per-sandbox no-network / allowlist is the **egress proxy** (§2), not this
+    step. Note it; it's not a microVM regression.
+  - *SDK method mismatch* (e.g. `commands.run`/`files.read` signature) → the SDK
+    version differs; all SDK calls are isolated in `e2b_provider.py`, adjust there.
+
+Then run it for real:
+```bash
+SANDKEEP_BACKEND=e2b E2B_API_KEY=... ANTHROPIC_API_KEY=... \
+  sandkeep run --repo /path/to/repo --task "..."
+```
+
+**Send me the result** of the boundary run (the `-v` output) and I'll fix
+whatever it flags — that's the loop that gets this to verified.
 
 ---
 

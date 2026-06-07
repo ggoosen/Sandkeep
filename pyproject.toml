@@ -28,6 +28,9 @@ dependencies = []
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "ruff>=0.6"]
+# Phase 2 microVM backend (SANDKEEP_BACKEND=e2b). Optional so the default
+# Docker backend stays dependency-free.
+e2b = ["e2b>=1.0"]
 
 [project.scripts]
 sandkeep = "sandkeep.cli:entrypoint"

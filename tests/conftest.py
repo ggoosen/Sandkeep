@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import uuid
@@ -70,8 +71,21 @@ def sandbox_image() -> str:
 
 
 @pytest.fixture
-def provider(sandbox_image: str) -> DockerProvider:
-    return DockerProvider(DockerConfig(image=sandbox_image, network="none"))
+def provider(request):
+    """The sandbox backend under test. Defaults to Docker; set
+    SANDKEEP_TEST_BACKEND=e2b (with E2B_API_KEY) to run the SAME suite —
+    notably tests/test_boundary.py — against the E2B microVM provider. That is
+    how a new backend earns its "verified" badge (BUILD_SPEC §16)."""
+    if os.environ.get("SANDKEEP_TEST_BACKEND") == "e2b":
+        if not os.environ.get("E2B_API_KEY"):
+            pytest.skip("SANDKEEP_TEST_BACKEND=e2b but E2B_API_KEY is not set")
+        from sandkeep.sandbox.e2b_provider import E2BConfig, E2BProvider
+
+        template = os.environ.get("SANDKEEP_E2B_TEMPLATE", "sandkeep")
+        return E2BProvider(E2BConfig(template=template, network="none"))
+    # default: Docker — only now do we require the docker image fixture
+    image = request.getfixturevalue("sandbox_image")
+    return DockerProvider(DockerConfig(image=image, network="none"))
 
 
 def _git(repo: Path, *args: str) -> str:

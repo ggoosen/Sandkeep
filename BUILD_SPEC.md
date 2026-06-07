@@ -490,7 +490,7 @@ The Docker provider already supports `--network none`; Phase 2 exposes it. `netw
 
 | Piece | Why it can't be built/tested here | Why no stub |
 |---|---|---|
-| **microVM `SandboxProvider`** (Firecracker/E2B) | needs KVM or a cloud account | the boundary is the product; a fake microVM would be a lie |
+| **microVM `SandboxProvider`** (Firecracker/E2B) | **candidate code shipped** (`e2b_provider.py`, `SANDKEEP_BACKEND=e2b`) but **unverified** — the boundary suite needs an E2B account to run against | not a stub: it's real, runnable code marked NOT-VERIFIED until `SANDKEEP_TEST_BACKEND=e2b pytest tests/test_boundary.py` is green (see docs/phase-2-implementation.md → "Verifying the E2B backend") |
 | **brokering egress *allowlist* proxy** | needs a real proxy enforcing per-host rules | an unenforced allowlist config reads as "exfil is blocked" when it isn't |
 | **secret-injecting broker** (agent never holds the key) | needs the proxy to inject creds out-of-band | a config flag can't stop the agent seeing an env var; pretending it does is false security |
 | **draft-PR human gate** | needs a GitHub remote + auth | nothing to test against locally |

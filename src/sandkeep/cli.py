@@ -28,11 +28,22 @@ SECURITY_BANNER = (
 )
 
 
+def _make_provider(cfg: Config, *, network: str):
+    """Construct the configured sandbox backend (SANDKEEP_BACKEND)."""
+    if cfg.backend == "e2b":
+        # Imported lazily so the optional 'e2b' dependency isn't required for
+        # the default Docker backend.
+        from .sandbox.e2b_provider import E2BConfig, E2BProvider
+
+        return E2BProvider(E2BConfig(template=cfg.e2b_template, network=network))
+    return DockerProvider(DockerConfig(image=cfg.image, network=network))
+
+
 def _make_controller(cfg: Config, *, network: str) -> Controller:
     cfg.ensure_dirs()
     audit = AuditLog(cfg.audit_log_path)
     store = StateStore(cfg.db_path, audit=audit)
-    provider = DockerProvider(DockerConfig(image=cfg.image, network=network))
+    provider = _make_provider(cfg, network=network)
     return Controller(cfg, store, audit, provider, network_denied=(network == "none"))
 
 
