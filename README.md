@@ -28,6 +28,31 @@ anything that goes wrong for free.
 - **Not production-grade isolation yet.** See the security status above.
 - **Not autonomous merge.** A human gates every change, by design.
 
+## Sandkeep or Cordon? — pick by how much you trust the run
+
+Sandkeep has a lighter-weight sibling, **[Cordon](#cordon--the-native-sibling)**,
+that enforces the *same* isolate → review → gate workflow using only Claude
+Code's native features (worktrees, sandbox, hooks, a governing `CLAUDE.md`) — no
+Docker. They sit at two points on one **trust dial**:
+
+```
+ TRUST HIGH ───────────────────────────────────► TRUST LOW
+        CORDON (native discipline)        SANDKEEP (real containment)
+   "I trust the agent — keep its work     "I don't trust the agent or the code —
+    isolated, reversible, reviewed"        keep it away from my machine"
+```
+
+| Use **Cordon** when… | Use **Sandkeep** when… |
+|---|---|
+| Your devs, your code, you want every session isolated/reviewable by default | The agent **or the code** is untrusted (3rd-party, a fork, a sketchy dep) |
+| You want full native speed and the complete Claude Code harness | You need a boundary you can point to in a security review |
+| No container runtime available | The run is **unattended** (CI, batch, a fleet) |
+| "Keep me safe from mistakes" | "Keep it away from my machine" |
+
+They share one vocabulary — isolate → review → gate, `accept`/`reject`, an audit
+trail — so a developer learns it once and slides along the dial as trust
+changes. **Cordon is the everyday driver; Sandkeep is the vault you escalate to.**
+
 ## Quickstart
 
 ```bash
@@ -35,12 +60,23 @@ pip install sandkeep                 # or: uvx sandkeep
 sandkeep image build                 # build the sandbox image (Node 22 + claude CLI + git + mise)
 export ANTHROPIC_API_KEY=sk-ant-...
 
+# unattended: hand it one task, get back a reviewable diff
 sandkeep run --repo /path/to/repo --task "Add input validation to parse_config()"
+
+# OR interactive: a full Claude Code session (chat, skills, MCP, plan mode)
+# inside the sandbox, on a throwaway clone — exits at the same review gate
+sandkeep shell --repo /path/to/repo
+
 sandkeep show <task_id>              # review the summary + patch
 sandkeep accept <task_id>            # apply to a fresh branch on your repo
 # or
 sandkeep reject <task_id>            # discard and tear down the sandbox
 ```
+
+Two ways to run the agent: **`run`** (headless, fire-and-forget — good for
+unattended/CI) and **`shell`** (interactive — the full harness on a disposable
+clone). Both end at the same human gate; nothing touches your real repo until
+you `accept`.
 
 See [`examples/quickstart.md`](examples/quickstart.md) for an end-to-end first run on a throwaway repo.
 
@@ -71,6 +107,22 @@ contract is strict: **any backend must pass the unmodified boundary test suite**
 - [ ] Phase 2 — microVM isolation, snapshots, parallelism, secret broker, draft-PR gate
 - [ ] Phase 3 — conflict detection, diff risk analysis
 - [ ] Phase 4 — per-repo skill authoring
+
+## Cordon — the native sibling
+
+**Cordon** is the high-trust end of the dial: the same isolate → review → gate
+discipline, enforced with Claude Code's own primitives instead of a container.
+A governing `CLAUDE.md` shepherds the session, hooks block the escape hatches, the
+Bash sandbox + worktree isolate the work, and review skills (`/cordon-review`,
+`/cordon-accept`) gate the merge — all so every session in a Cordon project is
+isolated, reversible, and reviewable **by default, with zero infrastructure**.
+
+It's containment against *accidents and misbehavior*, not against an adversary —
+when you genuinely don't trust the code, that's Sandkeep's job, and the two are
+designed to hand off to each other.
+
+The full build spec lives here: **[docs/native-harness-build-spec.md](docs/native-harness-build-spec.md)**.
+*(Cordon ships from its own repo — link TBD once published.)*
 
 ## License
 
