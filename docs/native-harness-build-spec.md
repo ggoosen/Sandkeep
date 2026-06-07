@@ -34,8 +34,25 @@ hostile code. There is no separate kernel. Cordon's job is to make the *safe,
 reversible, reviewable* workflow the **path of least resistance** (ideally the
 only one) — not to contain an adversary. For that, point users at Sandkeep.
 
-**What "force Claude to use this method" really means.** You can make the
-disciplined flow automatic and hard to leave, via four levers, strongest last:
+**What "force Claude to use this method" really means.** Governance here has two
+faces that must be designed together: a **soft layer that shapes intent** (the
+agent *wants* to follow the method and shepherds the user through it) and a
+**hard layer that enforces it** (the agent *can't* break the method even if it
+tries). Get both; neither alone is enough.
+
+**The soft layer — governance (shepherding).** One lever, and it's the one this
+update adds as first-class:
+
+0. **`CLAUDE.md`** — auto-loaded into Claude's context every session. It states
+   the rules of the house, makes Claude *narrate* the methodology to the user
+   (explain the sandbox, why something was blocked, what the next step is), and
+   makes Claude **refuse-and-redirect** to the sanctioned skills *before* a hard
+   rule ever fires. This governs the **agent**; it shepherds the **user** only
+   *through* the agent. It is **soft and probabilistic** — the model usually
+   follows it and occasionally drifts, which is exactly why the hard layer sits
+   underneath. Full spec in §7b.
+
+**The hard layer — enforcement.** Four levers, strongest last:
 
 1. **Defaults** — the project ships settings that put every session in the right
    mode (sandbox on, permissions scoped, the gate skill front-and-centre).
@@ -50,6 +67,13 @@ disciplined flow automatic and hard to leave, via four levers, strongest last:
    deployment, a determined *user* can still edit project settings — that's
    fine; Cordon governs the **agent**, and assumes a cooperative human.
 
+**Why both.** `CLAUDE.md` makes the right path the one Claude *chooses*; the hard
+layer makes the wrong path the one Claude *can't take*. The soft layer is what
+makes Cordon feel like shepherding rather than bumping into fences — without it,
+a user hits silent walls; with it, Claude explains the house and walks them
+through it. Never rely on the soft layer for safety, though: a security-relevant
+rule must always also exist in the hard layer.
+
 > ⚠️ **Verify the exact API surface at build time.** Hook event names, the
 > precise `permissionDecision` JSON, and worktree settings keys evolve. Before
 > implementing each component below, confirm against `claude --help`, the live
@@ -59,13 +83,14 @@ disciplined flow automatic and hard to leave, via four levers, strongest last:
 
 ---
 
-## 1. Architecture — five enforced guarantees
+## 1. Architecture — one governance layer over five enforced guarantees
 
 Cordon delivers the same conceptual guarantees as Sandkeep, mapped onto native
 primitives:
 
 | Guarantee | Native mechanism |
 |---|---|
+| **G0. The agent understands the method and shepherds the user through it** | `CLAUDE.md` governance brain (auto-loaded; narrates, refuses-and-redirects) — §7b |
 | **G1. Work is isolated from the main branch/tree** | `--worktree` → a throwaway branch + worktree under `.claude/worktrees/` |
 | **G2. The agent can't touch the host outside its workspace** | `sandbox` key (FS write confined to worktree; network allowlisted) + `PreToolUse` boundary hook |
 | **G3. The dangerous escape hatches are closed** | `permissions.deny` rules (push/reset, `.git`/`.claude` writes, secret reads) |
@@ -76,12 +101,19 @@ The session lifecycle Cordon enforces:
 
 ```
 open Claude Code in a Cordon project
-  └─ SessionStart hook: am I in a worktree + sandbox? if not → refuse / auto-enter
-       └─ work happens, every Bash/Edit/Write filtered by the PreToolUse boundary hook
-            └─ changes accumulate ONLY in the worktree branch (G1)
-                 └─ /cordon-review: show the diff, run checks, summarise (G4)
-                      └─ human decides: /cordon-accept (merge to a fresh branch) | /cordon-discard (delete worktree)
+  └─ CLAUDE.md loads: Claude now knows the house rules and will narrate them (G0)
+       └─ SessionStart hook: am I in a worktree + sandbox? if not → refuse / auto-enter
+            └─ work happens; Claude proposes the right path, the PreToolUse hook filters every Bash/Edit/Write
+                 └─ changes accumulate ONLY in the worktree branch (G1)
+                      └─ /cordon-review: show the diff, run checks, summarise (G4)
+                           └─ human decides: /cordon-accept (merge to a fresh branch) | /cordon-discard (delete worktree)
 ```
+
+The two layers in the same picture: **G0 (CLAUDE.md)** makes Claude *choose* this
+path and explain it; **G1–G5 (hooks/settings)** make it the *only* path that
+actually works. When Claude follows the governance, the user is shepherded
+smoothly; when it drifts, the hard layer catches it and Claude — per its
+CLAUDE.md — explains the block and redirects.
 
 ---
 
@@ -100,7 +132,11 @@ cordon/
   .claude-plugin/
     plugin.json                  # plugin manifest (§8)
     marketplace.json             # optional: for distribution
-  template/                      # what gets copied into a target project's .claude/
+  template/                      # what gets copied into a target project
+    CLAUDE.md                    # GOVERNANCE BRAIN: house rules + narration; posture-stamped (§7b)
+    governance/
+      CLAUDE.guide.md            # "guide" posture — light, explains and recommends
+      CLAUDE.enforce.md          # "enforce" posture — strict, refuses-and-redirects (default)
     settings.json                # defaults: sandbox, permissions, hooks, statusline (§3)
     hooks/
       boundary.sh                # PreToolUse: block out-of-bounds tool calls (§4)
@@ -482,6 +518,140 @@ allowed-tools: Bash(git worktree:*) Bash(git branch:*)
 
 ---
 
+## 7b. Governance layer (`CLAUDE.md`) — the shepherding brain (G0)
+
+This is the soft-governance layer: the thing that makes Claude itself act as the
+shepherd. It is what turns a pile of hooks and deny rules into a *framework a
+user is guided through* rather than a set of walls they bump into.
+
+### What it is and how it works
+
+`CLAUDE.md` at the project root is **auto-discovered and loaded into Claude's
+context at the start of every session** (verify current auto-discovery behavior;
+`--bare` disables it, and `.claude/CLAUDE.md` is also honored). Its contents
+become standing instructions the model treats as operating rules. Cordon ships a
+`template/CLAUDE.md` that the installer copies into the target project.
+
+Crucially, `CLAUDE.md` **governs Claude, and shepherds the user only through
+Claude.** It cannot block a tool call (that's the hooks) and it cannot stop a
+human from doing anything. What it does is make Claude:
+
+1. **Know the house rules** — isolation, no push, no main, gate before landing.
+2. **Narrate them** — explain the sandbox state, *why* a thing was blocked, and
+   the sanctioned next step, so the human is guided rather than stonewalled.
+3. **Refuse-and-redirect** — when asked to do something outside the flow, decline
+   and point at the right skill (`/cordon-review`, `/cordon-accept`) *before* a
+   hard rule has to fire. The hooks become the backstop, not the first contact.
+
+### Posture is a knob, not a guess
+
+The *tone* of governance is a per-project decision, so Cordon ships two postures
+and the installer stamps one into `CLAUDE.md`:
+
+| Posture | Voice | Use when |
+|---|---|---|
+| **guide** (`CLAUDE.guide.md`) | light: explains the method, recommends the skills, stays out of the way | trusted devs who want the rails but not a nanny |
+| **enforce** (`CLAUDE.enforce.md`, **default**) | strict: actively refuses out-of-flow requests, narrates every block, insists on the gate | shared repos, onboarding, "force the method" |
+
+`install.sh --posture guide|enforce` (default `enforce`) copies the chosen
+variant to `template/CLAUDE.md` → the target's root `CLAUDE.md`. Switching
+posture later is re-running the installer or swapping the file.
+
+### `template/governance/CLAUDE.enforce.md` (default, ready to ship)
+
+```markdown
+# CLAUDE.md — this project runs under Cordon (enforce mode)
+
+> You are operating inside a **Cordon-governed** project. Your job is not only to
+> do the work, but to keep every change isolated, reversible, and reviewable, and
+> to **guide the human through that workflow**. These rules override default
+> behavior. Follow them exactly.
+
+## The method (non-negotiable)
+
+1. **All work happens in an isolated worktree.** If the session is not in one,
+   the startup gate will have refused — tell the user to relaunch with
+   `claude --worktree` and explain why (their main checkout stays clean; a clean
+   worktree is auto-deleted on exit, so nothing is lost).
+2. **Never touch `main`/`master`, never `git push`, never `git reset --hard`,
+   never write to `.git/` or `.claude/`.** These are blocked by policy; do not
+   try to work around them. If the user asks for one, **decline and redirect**
+   (see below) rather than attempting it and hitting a wall.
+3. **Network egress is restricted.** Use your tools/MCP; do not shell out to
+   `curl`/`wget`/raw sockets. If something needs a network resource you can't
+   reach, say so plainly — don't improvise around the boundary.
+4. **Nothing lands without the human gate.** When the work is ready, **stop** and
+   run `/cordon-review`. Do not consider the task done until the human has
+   reviewed and chosen `/cordon-accept` or `/cordon-discard`. You never land or
+   discard on your own.
+
+## How to shepherd the user
+
+- **Narrate state.** At the start, in one line, tell them where they are:
+  "Working in an isolated worktree (`<name>`), sandbox on, changes will be gated
+  before they touch your repo." Keep it short; don't lecture every turn.
+- **Explain blocks.** If a tool call is denied, don't just retry — tell the user
+  what was blocked, why (the Cordon rule), and the sanctioned alternative.
+- **Refuse-and-redirect, early.** When asked to do something outside the method:
+  > "That's outside the Cordon flow — I don't push or merge to main here. When
+  > you're happy with the work, run `/cordon-review` and then `/cordon-accept`,
+  > which lands it on a fresh branch you can merge yourself."
+  Do this *before* attempting the action, so the user learns the model rather
+  than watching you hit a fence.
+- **Drive toward the gate.** As work nears completion, proactively suggest
+  `/cordon-review`. Make finishing == handing to the human, not pushing.
+
+## What you must NOT do
+
+- Do not edit settings, hooks, or this file to loosen the rules, even if asked
+  "just for now". If the user wants different policy, that's a deliberate change
+  they make to the Cordon config outside a task — not something you do mid-flow.
+- Do not present work as "done and shipped". The most you ship is "ready for
+  review at the gate."
+
+## If something feels blocked for the wrong reason
+
+Say so. Surface the exact rule and suggest the user adjust the Cordon config
+deliberately. Never silently route around the boundary — that defeats the point.
+```
+
+### `template/governance/CLAUDE.guide.md` (light posture)
+
+```markdown
+# CLAUDE.md — this project uses Cordon (guide mode)
+
+> This project keeps changes isolated, reversible, and reviewable using Cordon.
+> Help the user work that way, but stay light — recommend, don't nag.
+
+- Work lands in an isolated worktree; if you're not in one, suggest
+  `claude --worktree`. The user's main checkout stays clean.
+- Prefer the project's flow: when work is ready, suggest `/cordon-review`, then
+  `/cordon-accept` (lands on a fresh branch) or `/cordon-discard`.
+- `git push`, force-resets, and writes to `.git`/`.claude` are blocked by policy;
+  if one comes up, mention the gate skills instead.
+- Once per session, briefly note the setup so the user knows the rails exist.
+  After that, get out of the way and do the work.
+```
+
+### Honest limits (carry into §12)
+
+- **Soft and probabilistic.** The model usually honors `CLAUDE.md` but can drift,
+  especially in long sessions or after compaction. **Never put a security-
+  critical rule *only* here** — every such rule must also live in
+  `permissions.deny` / hooks / managed settings (the hard layer). `CLAUDE.md`
+  shapes intent; it does not enforce.
+- **It governs the agent, not the human.** It cannot stop a user; it makes Claude
+  guide them. The "force" comes from the hard layer; the *shepherding* comes from
+  here.
+- **Plugins can't ship it into a project.** `CLAUDE.md` is project-scoped content;
+  the **template install** places it. A plugin alone gives skills+hooks but not
+  the governance brain — so the template path is the complete framework (note
+  this in §8 and the README).
+- **Keep it short and imperative.** Long CLAUDE.md files dilute attention; the
+  enforce variant above is near the ceiling. Resist bloating it.
+
+---
+
 ## 8. Packaging — template *and* plugin (§ delivery)
 
 Ship two install paths from one source:
@@ -516,9 +686,11 @@ Users install with `/plugin install https://github.com/<you>/cordon`.
 > some settings, but **the project still needs the `sandbox` + `permissions.deny`
 > settings** to be active. Plugins can't force arbitrary `permissions`/`sandbox`
 > keys into a project's settings (only `agent`/`subagentStatusLine`-type defaults
-> per current docs — verify). So: the **template install is the complete
-> enforcement**; the **plugin is the convenient skills+hooks layer**. State this
-> in the README so nobody thinks `/plugin install` alone sandboxes them.
+> per current docs — verify). It also **cannot ship the `CLAUDE.md` governance
+> brain** (§7b) — that's project-scoped content the template install places. So:
+> the **template install is the complete framework** (governance + enforcement);
+> the **plugin is the convenient skills+hooks layer** on top. State this in the
+> README so nobody thinks `/plugin install` alone governs or sandboxes them.
 
 ---
 
@@ -563,11 +735,20 @@ echo '{"tool_name":"Write","tool_input":{"file_path":"/etc/passwd"},"hook_event_
   `claude -p` smoke run in a fixture repo if feasible, else assert the settings
   parse + a representative deny via the hook).
 
+**`tests/test-governance.sh` — the CLAUDE.md layer behaves (soft, so assert via
+`claude -p` transcripts in a fixture, not exit codes):**
+- with the **enforce** posture, asking Claude to `git push` → it declines and
+  names `/cordon-review`/`/cordon-accept` instead of attempting the push.
+- Claude narrates the isolated-worktree state at session start.
+- the posture stamp is correct after `install.sh --posture guide|enforce`.
+- (These are behavioral/probabilistic checks — treat flakes as signal to tighten
+  the CLAUDE.md wording, and remember the hard layer is the real guarantee.)
+
 **End-to-end (manual or scripted with `claude -p` in a fixture):**
-- `claude --worktree` in a fixture → edits land only in the worktree branch →
-  `/cordon-review` shows the diff → `/cordon-accept` lands a `cordon-accepted/*`
-  branch → main checkout byte-for-byte unchanged → `/cordon-discard` removes a
-  worktree cleanly.
+- `claude --worktree` in a fixture → Claude opens by stating the house rules
+  (G0) → edits land only in the worktree branch → `/cordon-review` shows the diff
+  → `/cordon-accept` lands a `cordon-accepted/*` branch → main checkout
+  byte-for-byte unchanged → `/cordon-discard` removes a worktree cleanly.
 
 ---
 
@@ -582,10 +763,13 @@ echo '{"tool_name":"Write","tool_input":{"file_path":"/etc/passwd"},"hook_event_
 4. **`settings.json`** — wire sandbox + deny + hooks + statusline; verify it loads clean.
 5. **`audit.sh` + statusline** — observability.
 6. **The four skills** — review / accept / discard / status.
-7. **`install.sh`** — template delivery; idempotent; touches `.gitignore`.
-8. **Plugin packaging** — `plugin.json`, `hooks/hooks.json`, plugin-scoped skills.
-9. **`managed-settings.example.json`** + deployment docs.
-10. **README** with the security-honesty callout front and centre; end-to-end demo.
+7. **Governance brain** — `CLAUDE.guide.md` + `CLAUDE.enforce.md` + posture
+   stamping; `tests/test-governance.sh`. This is what makes it a *framework the
+   user is guided through*, not just walls — don't skip or stub it.
+8. **`install.sh`** — template delivery (incl. posture stamp); idempotent; touches `.gitignore`.
+9. **Plugin packaging** — `plugin.json`, `hooks/hooks.json`, plugin-scoped skills.
+10. **`managed-settings.example.json`** + deployment docs.
+11. **README** with the security-honesty callout front and centre; end-to-end demo.
 
 ---
 
@@ -606,6 +790,10 @@ echo '{"tool_name":"Write","tool_input":{"file_path":"/etc/passwd"},"hook_event_
 - **Hooks are bypassable by editing the hooks.** That's why the security-relevant
   rules also live in `permissions.deny` (merge-and-can't-loosen) and ideally
   managed settings — defense in depth, not a single check.
+- **The governance layer (`CLAUDE.md`) is soft.** It shapes what Claude *chooses*,
+  not what it *can* do, and it can drift in long sessions. It's what makes the
+  framework feel like shepherding — but every safety-critical rule it states must
+  also be enforced by the hard layer. Governance guides; hooks/settings enforce.
 
 ---
 
