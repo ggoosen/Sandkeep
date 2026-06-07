@@ -33,9 +33,9 @@ dev = ["pytest>=8", "ruff>=0.6"]
 sandkeep = "sandkeep.cli:entrypoint"
 
 [project.urls]
-Homepage = "https://github.com/<your-org>/sandkeep"
-Repository = "https://github.com/<your-org>/sandkeep"
-Issues = "https://github.com/<your-org>/sandkeep/issues"
+Homepage = "https://github.com/ggoosen/Sandkeep"
+Repository = "https://github.com/ggoosen/Sandkeep"
+Issues = "https://github.com/ggoosen/Sandkeep/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/sandkeep"]
