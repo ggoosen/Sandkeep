@@ -8,6 +8,7 @@ illegal transitions raise rather than write.
 from __future__ import annotations
 
 import sqlite3
+import threading
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -68,8 +69,16 @@ def _now() -> str:
 class StateStore:
     def __init__(self, db_path: Path | str, audit: AuditLog | None = None) -> None:
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(str(db_path))
+        # Concurrency (BUILD_SPEC §12): one connection shared across worker
+        # threads, every access serialized by a reentrant lock (RLock because
+        # update_state/list_tasks call get_task). This is simpler and more
+        # robust than many connections contending for the file. WAL +
+        # busy_timeout still help if a second process opens the same db.
+        self._lock = threading.RLock()
+        self._conn = sqlite3.connect(str(db_path), check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
+        self._conn.execute("PRAGMA journal_mode=WAL")
+        self._conn.execute("PRAGMA busy_timeout=5000")
         self._conn.executescript(_SCHEMA)
         self._migrate()
         self._audit = audit
@@ -90,35 +99,39 @@ class StateStore:
     # -- tasks ----------------------------------------------------------
 
     def create_task(self, task: Task, trace_id: str) -> None:
-        now = _now()
-        with self._conn:
-            self._conn.execute(
-                "INSERT INTO tasks (id, repo_path, instruction, base_ref, branch,"
-                " state, model, agent, max_turns, sandbox_id, patch_path, created_at, updated_at)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (
-                    task.id,
-                    task.repo_path,
-                    task.instruction,
-                    task.base_ref,
-                    task.branch,
-                    task.state.value,
-                    task.model,
-                    task.agent,
-                    task.max_turns,
-                    task.sandbox_id,
-                    task.patch_path,
-                    now,
-                    now,
-                ),
-            )
+        with self._lock:
+            now = _now()
+            with self._conn:
+                self._conn.execute(
+                    "INSERT INTO tasks (id, repo_path, instruction, base_ref, branch,"
+                    " state, model, agent, max_turns, sandbox_id, patch_path, created_at, updated_at)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        task.id,
+                        task.repo_path,
+                        task.instruction,
+                        task.base_ref,
+                        task.branch,
+                        task.state.value,
+                        task.model,
+                        task.agent,
+                        task.max_turns,
+                        task.sandbox_id,
+                        task.patch_path,
+                        now,
+                        now,
+                    ),
+                )
         if self._audit:
             self._audit.log(
                 "task_created", trace_id=trace_id, task_id=task.id, state=task.state.value
             )
 
     def get_task(self, task_id: str) -> Task:
-        row = self._conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM tasks WHERE id = ?", (task_id,)
+            ).fetchone()
         if row is None:
             raise TaskNotFound(task_id)
         return Task(
@@ -136,8 +149,11 @@ class StateStore:
         )
 
     def list_tasks(self) -> list[Task]:
-        rows = self._conn.execute("SELECT id FROM tasks ORDER BY created_at").fetchall()
-        return [self.get_task(row["id"]) for row in rows]
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT id FROM tasks ORDER BY created_at"
+            ).fetchall()
+            return [self.get_task(row["id"]) for row in rows]
 
     def update_fields(self, task_id: str, **fields: str) -> None:
         """Update mutable non-state columns (branch, sandbox_id, patch_path)."""
@@ -148,7 +164,7 @@ class StateStore:
         if not fields:
             return
         sets = ", ".join(f"{k} = ?" for k in fields)
-        with self._conn:
+        with self._lock, self._conn:
             self._conn.execute(
                 f"UPDATE tasks SET {sets}, updated_at = ? WHERE id = ?",
                 (*fields.values(), _now(), task_id),
@@ -160,37 +176,41 @@ class StateStore:
         self, task_id: str, new_state: TaskState, trace_id: str, detail: str = ""
     ) -> None:
         """Transition a task, writing tasks.state and a transitions row in one
-        transaction. Raises IllegalTransition on a move §9 does not allow."""
-        task = self.get_task(task_id)
-        if new_state not in ALLOWED_TRANSITIONS[task.state]:
-            raise IllegalTransition(
-                f"{task.state.value} → {new_state.value} is not a legal transition"
-            )
-        now = _now()
-        with self._conn:
-            self._conn.execute(
-                "UPDATE tasks SET state = ?, updated_at = ? WHERE id = ?",
-                (new_state.value, now, task_id),
-            )
-            self._conn.execute(
-                "INSERT INTO transitions (id, task_id, from_state, to_state, trace_id, detail, ts)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (uuid.uuid4().hex, task_id, task.state.value, new_state.value, trace_id, detail, now),
-            )
+        transaction. Raises IllegalTransition on a move §9 does not allow.
+        The read-check-write is atomic under the store lock."""
+        with self._lock:
+            task = self.get_task(task_id)
+            if new_state not in ALLOWED_TRANSITIONS[task.state]:
+                raise IllegalTransition(
+                    f"{task.state.value} → {new_state.value} is not a legal transition"
+                )
+            now = _now()
+            with self._conn:
+                self._conn.execute(
+                    "UPDATE tasks SET state = ?, updated_at = ? WHERE id = ?",
+                    (new_state.value, now, task_id),
+                )
+                self._conn.execute(
+                    "INSERT INTO transitions (id, task_id, from_state, to_state, trace_id, detail, ts)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (uuid.uuid4().hex, task_id, task.state.value, new_state.value, trace_id, detail, now),
+                )
+            from_state = task.state.value
         if self._audit:
             self._audit.log(
                 "state_transition",
                 trace_id=trace_id,
                 task_id=task_id,
-                from_state=task.state.value,
+                from_state=from_state,
                 to_state=new_state.value,
                 detail=detail,
             )
 
     def get_transitions(self, task_id: str) -> list[sqlite3.Row]:
-        return self._conn.execute(
-            "SELECT * FROM transitions WHERE task_id = ? ORDER BY ts", (task_id,)
-        ).fetchall()
+        with self._lock:
+            return self._conn.execute(
+                "SELECT * FROM transitions WHERE task_id = ? ORDER BY ts", (task_id,)
+            ).fetchall()
 
     # -- ledger -----------------------------------------------------------
 
@@ -202,7 +222,7 @@ class StateStore:
         output_tokens: int,
         sandbox_seconds: float,
     ) -> None:
-        with self._conn:
+        with self._lock, self._conn:
             self._conn.execute(
                 "INSERT INTO ledger (task_id, model, input_tokens, output_tokens,"
                 " sandbox_seconds, ts) VALUES (?, ?, ?, ?, ?, ?)",
@@ -210,6 +230,7 @@ class StateStore:
             )
 
     def get_ledger(self, task_id: str) -> list[sqlite3.Row]:
-        return self._conn.execute(
-            "SELECT * FROM ledger WHERE task_id = ? ORDER BY ts", (task_id,)
-        ).fetchall()
+        with self._lock:
+            return self._conn.execute(
+                "SELECT * FROM ledger WHERE task_id = ? ORDER BY ts", (task_id,)
+            ).fetchall()

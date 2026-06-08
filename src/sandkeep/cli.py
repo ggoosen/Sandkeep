@@ -25,7 +25,7 @@ from .config import (
     stored_secrets,
     write_secret,
 )
-from .controller import Controller, ControllerError
+from .controller import Controller, ControllerError, run_concurrent
 from .models import TaskState
 from .sandbox.docker_provider import (
     DockerConfig,
@@ -229,6 +229,58 @@ def _cmd_run(cfg: Config, args: argparse.Namespace) -> int:
     return 1
 
 
+def _read_batch_tasks(args: argparse.Namespace) -> list[str]:
+    tasks = list(args.task or [])
+    if args.tasks_file:
+        from pathlib import Path
+
+        for line in Path(args.tasks_file).read_text().splitlines():
+            line = line.strip()
+            if line and not line.startswith("#"):
+                tasks.append(line)
+    return tasks
+
+
+def _cmd_batch(cfg: Config, args: argparse.Namespace) -> int:
+    driver = get_driver(args.agent or cfg.agent)
+    if not _ensure_secret(cfg, driver):
+        return 2
+    if cfg.backend == "e2b" and not _ensure_named_secret(cfg, "E2B_API_KEY"):
+        return 2
+    tasks = _read_batch_tasks(args)
+    if not tasks:
+        print("error: no tasks — pass --task (repeatable) or --tasks-file",
+              file=sys.stderr)
+        return 2
+    print(SECURITY_BANNER, file=sys.stderr)
+    network = _resolve_network(cfg, args)
+    _warn_if_no_network(network)
+    print(f"running {len(tasks)} task(s), up to {args.max_parallel} in parallel "
+          "— each in its own sandbox\n", file=sys.stderr)
+
+    controller = _make_controller(cfg, network=network, agent=driver.name)
+    specs = [
+        dict(repo_path=args.repo, instruction=t, model=args.model, agent=driver.name)
+        for t in tasks
+    ]
+    results = run_concurrent(controller, specs, max_workers=args.max_parallel)
+
+    print(f"{len(results)} task(s):")
+    rc = 0
+    for spec, res in zip(specs, results):
+        label = spec["instruction"][:50]
+        if isinstance(res, Exception):
+            print(f"  ERROR   {label}  — {res}")
+            rc = 1
+        elif res.state is TaskState.REVIEW:
+            print(f"  {res.id}  review   {label}")
+        else:
+            print(f"  {res.id}  {res.state.value}  {label}")
+            rc = 1
+    print("\nreview each with: sandkeep show <id>  →  accept / reject", file=sys.stderr)
+    return rc
+
+
 def _cmd_shell(cfg: Config, args: argparse.Namespace) -> int:
     driver = get_driver(args.agent or cfg.agent)
     if not _ensure_secret(cfg, driver):
@@ -390,6 +442,21 @@ def build_parser() -> argparse.ArgumentParser:
              "boundary testing / offline agents). Default: egress (SANDKEEP_NETWORK).",
     )
 
+    batch = sub.add_parser(
+        "batch", help="run many tasks concurrently, one sandbox each")
+    batch.add_argument("--repo", required=True, help="path to the target git repo")
+    batch.add_argument("--task", action="append",
+                       help="a task instruction (repeat for multiple)")
+    batch.add_argument("--tasks-file",
+                       help="file with one task per line (# comments allowed)")
+    batch.add_argument("--model", default=None)
+    batch.add_argument("--agent", default=None,
+                       help=f"agent to run (default: {DEFAULT_AGENT})")
+    batch.add_argument("--max-parallel", type=int, default=4,
+                       help="max tasks running at once (default: 4)")
+    batch.add_argument("--no-network", action="store_true",
+                       help="run sandboxes with no network at all")
+
     shell = sub.add_parser(
         "shell", help="open an interactive Claude Code session inside a sandbox"
     )
@@ -453,6 +520,7 @@ def main(argv: list[str] | None = None) -> int:
             return _cmd_auth(cfg, args)
         handler = {
             "run": _cmd_run,
+            "batch": _cmd_batch,
             "shell": _cmd_shell,
             "skills": _cmd_skills,
             "test": _cmd_test,

@@ -18,6 +18,7 @@ import json
 import os
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from . import agent_runner, diff, policy, results, skills
@@ -33,6 +34,36 @@ from .violations import Violation, archive_sandbox, scan_agent_output
 
 class ControllerError(Exception):
     pass
+
+
+def run_concurrent(
+    controller: "Controller",
+    specs: list[dict],
+    *,
+    max_workers: int = 4,
+) -> list:
+    """Run many tasks in parallel (BUILD_SPEC §12), one sandbox each, on a
+    shared Controller. Safe because the StateStore and AuditLog are
+    thread-safe and the provider addresses each sandbox independently; the real
+    parallelism is the per-task sandboxes/agent runs, not the (microsecond) DB
+    writes. ``specs`` are run_task kwargs.
+
+    Returns results in submission order: a Task on completion, or the raised
+    Exception for a host-side failure (so one bad task can't sink the batch).
+    """
+    results: list = [None] * len(specs)
+
+    def worker(spec: dict):
+        return controller.run_task(**spec)
+
+    with ThreadPoolExecutor(max_workers=max(1, max_workers)) as pool:
+        futures = {pool.submit(worker, spec): i for i, spec in enumerate(specs)}
+        for future, i in futures.items():
+            try:
+                results[i] = future.result()
+            except Exception as exc:  # host-side error for this task only
+                results[i] = exc
+    return results
 
 
 class Controller:

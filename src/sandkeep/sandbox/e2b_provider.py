@@ -48,6 +48,7 @@ from __future__ import annotations
 import io
 import shlex
 import tarfile
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -117,6 +118,7 @@ class E2BProvider(SandboxProvider):
         self.config = config or E2BConfig()
         self._Sandbox, self._ExitExc, self._TimeoutExc = _import_e2b()
         self._cache: dict[str, object] = {}  # id -> live Sandbox (per process)
+        self._cache_lock = threading.Lock()  # concurrent tasks share one provider
 
     # -- SandboxProvider -------------------------------------------------
 
@@ -139,7 +141,8 @@ class E2BProvider(SandboxProvider):
             raise SandboxError(f"E2B sandbox create failed: {exc}") from exc
 
         sbx_id = getattr(sbx, "sandbox_id", None) or getattr(sbx, "id")
-        self._cache[sbx_id] = sbx
+        with self._cache_lock:
+            self._cache[sbx_id] = sbx
 
         # No host mount on E2B: upload the repo, then build the boundary as
         # root so the non-root agent can't subvert it —
@@ -203,19 +206,22 @@ class E2BProvider(SandboxProvider):
         except Exception as exc:
             raise SandboxError(f"E2B kill failed for {handle.id}: {exc}") from exc
         finally:
-            self._cache.pop(handle.id, None)
+            with self._cache_lock:
+                self._cache.pop(handle.id, None)
 
     # -- internals -------------------------------------------------------
 
     def _connect(self, sandbox_id: str):
         """Return a live Sandbox for an id — cached in-process, else reconnect
         (so a fresh `sandkeep accept` process can still reach the sandbox)."""
-        if sandbox_id in self._cache:
-            return self._cache[sandbox_id]
+        with self._cache_lock:
+            if sandbox_id in self._cache:
+                return self._cache[sandbox_id]
         opts = {"api_key": self.config.api_key} if self.config.api_key else {}
         try:
             sbx = self._Sandbox.connect(sandbox_id, **opts)
         except Exception as exc:
             raise SandboxError(f"E2B connect failed for {sandbox_id}: {exc}") from exc
-        self._cache[sandbox_id] = sbx
+        with self._cache_lock:
+            self._cache[sandbox_id] = sbx
         return sbx

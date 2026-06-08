@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import sys
+import threading
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -26,6 +27,7 @@ class AuditLog:
         self.path = path
         self.echo = echo  # also mirror to stderr (useful for `sandkeep run`)
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._lock = threading.Lock()  # serialize writes from concurrent tasks
 
     def log(self, event: str, *, trace_id: str, **fields: Any) -> None:
         record = {
@@ -35,7 +37,7 @@ class AuditLog:
             **fields,
         }
         line = json.dumps(record, default=str, ensure_ascii=False)
-        with self.path.open("a", encoding="utf-8") as fh:
+        with self._lock, self.path.open("a", encoding="utf-8") as fh:
             fh.write(line + "\n")
         if self.echo:
             sys.stderr.write(line + "\n")
