@@ -301,8 +301,24 @@ def _cmd_show(cfg: Config, args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_test(cfg: Config, args: argparse.Namespace) -> int:
+    test_cmd = args.test_cmd or cfg.test_command
+    if not test_cmd:
+        print("error: no test command — pass --test-cmd or set SANDKEEP_TEST_COMMAND",
+              file=sys.stderr)
+        return 2
+    controller = _make_controller(cfg, network="egress")  # tests may fetch deps
+    task = controller.store.get_task(args.task_id)
+    print(f"running tests in sandbox: {test_cmd}", file=sys.stderr)
+    code, output = controller.run_tests(task, test_cmd)
+    print(output.rstrip())
+    print(f"\ntests {'passed' if code == 0 else f'FAILED (exit {code})'}", file=sys.stderr)
+    return 0 if code == 0 else 1
+
+
 def _cmd_accept(cfg: Config, args: argparse.Namespace) -> int:
-    controller = _make_controller(cfg, network="none")
+    # tests may need to fetch deps → egress; falls back fine if none configured
+    controller = _make_controller(cfg, network="egress")
     task = controller.store.get_task(args.task_id)
     conflicts = controller.conflicts(task)
     if conflicts:
@@ -312,7 +328,14 @@ def _cmd_accept(cfg: Config, args: argparse.Namespace) -> int:
             print(f"    {c.other_task_id}: {', '.join(c.files)}", file=sys.stderr)
         print("  applying anyway (human gate) — re-review the others before accepting them.",
               file=sys.stderr)
-    sha = controller.accept(args.task_id)
+    test_cmd = None if args.no_test else (args.test_cmd or cfg.test_command)
+    if test_cmd:
+        print(f"test gate: running `{test_cmd}` in the sandbox…", file=sys.stderr)
+    try:
+        sha = controller.accept(args.task_id, test_command=test_cmd)
+    except ControllerError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
     print(f"applied to branch sandkeep-accepted/{task.id} @ {sha[:12]}")
     print("your working tree and current branch are untouched")
     return 0
@@ -398,9 +421,24 @@ def build_parser() -> argparse.ArgumentParser:
     sk_list = sk_sub.add_parser("list", help="list skills authored for a repo")
     sk_list.add_argument("--repo", required=True, help="path to the target git repo")
 
-    for name in ("status", "show", "accept", "reject"):
+    for name in ("status", "show", "reject"):
         p = sub.add_parser(name)
         p.add_argument("task_id")
+
+    accept = sub.add_parser("accept", help="apply a task's patch to a fresh host branch")
+    accept.add_argument("task_id")
+    accept.add_argument(
+        "--test-cmd", dest="test_cmd", default=None,
+        help="test command to run in the sandbox before merging (overrides "
+             "SANDKEEP_TEST_COMMAND); merge is refused if it fails")
+    accept.add_argument(
+        "--no-test", action="store_true",
+        help="skip the configured test gate for this accept")
+
+    test = sub.add_parser("test", help="run the test gate in a task's sandbox (no merge)")
+    test.add_argument("task_id")
+    test.add_argument("--test-cmd", dest="test_cmd", default=None,
+                      help="test command (overrides SANDKEEP_TEST_COMMAND)")
 
     return parser
 
@@ -417,6 +455,7 @@ def main(argv: list[str] | None = None) -> int:
             "run": _cmd_run,
             "shell": _cmd_shell,
             "skills": _cmd_skills,
+            "test": _cmd_test,
             "status": _cmd_status,
             "show": _cmd_show,
             "accept": _cmd_accept,
