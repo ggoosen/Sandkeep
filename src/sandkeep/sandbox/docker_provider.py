@@ -139,3 +139,55 @@ def build_image(context_dir: Path, tag: str) -> None:
     )
     if proc.returncode != 0:
         raise SandboxError(f"docker build failed (exit {proc.returncode})")
+
+
+# Per-agent image templating (BUILD_SPEC §13). The default 'claude' image is
+# the static sandbox_image/Dockerfile; other agents render this base with their
+# driver's install_steps() injected (root phase, before USER node).
+_BASE_DOCKERFILE = """\
+# Rendered by sandkeep for agent: {agent}. Mirrors sandbox_image/Dockerfile.
+FROM node:22-slim
+
+RUN apt-get update \\
+    && apt-get install -y --no-install-recommends git ca-certificates curl \\
+    && rm -rf /var/lib/apt/lists/*
+
+{agent_install}
+
+RUN mkdir -p /work && chown -R node:node /work
+
+USER node
+ENV HOME=/home/node
+
+RUN curl -fsSL https://mise.run | sh
+ENV PATH="/home/node/.local/bin:/home/node/.local/share/mise/shims:${{PATH}}"
+
+COPY --chown=node:node settings.json /home/node/.claude/settings.json
+
+WORKDIR /work
+CMD ["sleep", "infinity"]
+"""
+
+
+def render_dockerfile(agent: str, install_steps: list[str]) -> str:
+    """The sandbox Dockerfile for an agent: the shared base + the agent's CLI
+    install steps as RUN lines (run as root, before the drop to USER node)."""
+    install = "\n".join(f"RUN {step}" for step in install_steps) or "# (no agent install steps)"
+    return _BASE_DOCKERFILE.format(agent=agent, agent_install=install)
+
+
+def build_agent_image(context_dir: Path, tag: str, agent: str, install_steps: list[str]) -> None:
+    """Render a per-agent Dockerfile and build it, reusing context_dir's other
+    assets (settings.json). The static Dockerfile is left untouched."""
+    import shutil
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_dir = Path(tmp)
+        shutil.copy(context_dir / "settings.json", tmp_dir / "settings.json")
+        (tmp_dir / "Dockerfile").write_text(render_dockerfile(agent, install_steps))
+        proc = subprocess.run(
+            ["docker", "build", "--tag", tag, str(tmp_dir)], capture_output=False
+        )
+    if proc.returncode != 0:
+        raise SandboxError(f"docker build failed for agent {agent} (exit {proc.returncode})")

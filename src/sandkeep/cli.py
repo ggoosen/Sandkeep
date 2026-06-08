@@ -27,7 +27,12 @@ from .config import (
 )
 from .controller import Controller, ControllerError
 from .models import TaskState
-from .sandbox.docker_provider import DockerConfig, DockerProvider, build_image
+from .sandbox.docker_provider import (
+    DockerConfig,
+    DockerProvider,
+    build_agent_image,
+    build_image,
+)
 from .state_store import StateStore, TaskNotFound
 
 SECURITY_BANNER = (
@@ -36,22 +41,23 @@ SECURITY_BANNER = (
 )
 
 
-def _make_provider(cfg: Config, *, network: str):
-    """Construct the configured sandbox backend (SANDKEEP_BACKEND)."""
+def _make_provider(cfg: Config, *, network: str, agent: str = DEFAULT_AGENT):
+    """Construct the configured sandbox backend (SANDKEEP_BACKEND), using the
+    image that matches the selected agent (per-agent images, BUILD_SPEC §13)."""
     if cfg.backend == "e2b":
         # Imported lazily so the optional 'e2b' dependency isn't required for
         # the default Docker backend.
         from .sandbox.e2b_provider import E2BConfig, E2BProvider
 
         return E2BProvider(E2BConfig(template=cfg.e2b_template, network=network))
-    return DockerProvider(DockerConfig(image=cfg.image, network=network))
+    return DockerProvider(DockerConfig(image=cfg.image_for(agent), network=network))
 
 
-def _make_controller(cfg: Config, *, network: str) -> Controller:
+def _make_controller(cfg: Config, *, network: str, agent: str = DEFAULT_AGENT) -> Controller:
     cfg.ensure_dirs()
     audit = AuditLog(cfg.audit_log_path)
     store = StateStore(cfg.db_path, audit=audit)
-    provider = _make_provider(cfg, network=network)
+    provider = _make_provider(cfg, network=network, agent=agent)
     return Controller(cfg, store, audit, provider, network_denied=(network == "none"))
 
 
@@ -174,18 +180,16 @@ def _cmd_auth(cfg: Config, args: argparse.Namespace) -> int:
 
 def _cmd_image_build(cfg: Config, args: argparse.Namespace) -> int:
     driver = get_driver(args.agent or cfg.agent)
-    if driver.name != DEFAULT_AGENT:
-        # The static sandbox_image/Dockerfile bakes in the default agent only.
-        # TODO(phase-5): template the Dockerfile from driver.install_steps() so
-        # `image build --agent <name>` renders a per-agent image.
-        print(
-            f"error: per-agent image build for '{driver.name}' is not implemented "
-            "yet; only the default 'claude' image builds from sandbox_image/Dockerfile",
-            file=sys.stderr,
+    tag = cfg.image_for(driver.name)
+    if driver.name == DEFAULT_AGENT:
+        # default agent: the canonical static Dockerfile
+        build_image(resource_path("sandbox_image"), tag)
+    else:
+        # other agents: render the base + the driver's install steps
+        build_agent_image(
+            resource_path("sandbox_image"), tag, driver.name, driver.install_steps()
         )
-        return 1
-    build_image(resource_path("sandbox_image"), cfg.image)
-    print(f"built {cfg.image} (agent: {driver.name})")
+    print(f"built {tag} (agent: {driver.name})")
     return 0
 
 
@@ -200,7 +204,7 @@ def _cmd_run(cfg: Config, args: argparse.Namespace) -> int:
     # purpose; TODO(phase-2): brokering egress *allowlist* proxy + secret broker.
     network = _resolve_network(cfg, args)
     _warn_if_no_network(network)
-    controller = _make_controller(cfg, network=network)
+    controller = _make_controller(cfg, network=network, agent=driver.name)
     task = controller.run_task(
         args.repo,
         args.task,
@@ -238,7 +242,7 @@ def _cmd_shell(cfg: Config, args: argparse.Namespace) -> int:
     # purpose; TODO(phase-2): brokering egress allowlist proxy)
     network = _resolve_network(cfg, args)
     _warn_if_no_network(network)
-    controller = _make_controller(cfg, network=network)
+    controller = _make_controller(cfg, network=network, agent=driver.name)
     task = controller.run_interactive(
         args.repo, model=args.model, agent=driver.name, seed=args.task,
         skip_permissions=args.skip_permissions,

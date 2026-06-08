@@ -88,6 +88,13 @@ class Config:
         # ~/.aws/credentials. TODO(phase-2): secret broker removes this.
         return self.home / "env"
 
+    def image_for(self, agent: str) -> str:
+        """Sandbox image tag for an agent: the default `image` for the default
+        agent (back-compat), else a per-agent tag (BUILD_SPEC §13)."""
+        if agent == DEFAULT_AGENT:
+            return self.image
+        return f"sandkeep-sandbox:{agent}"
+
     def ensure_dirs(self) -> None:
         self.home.mkdir(parents=True, exist_ok=True)
         self.outputs_dir.mkdir(parents=True, exist_ok=True)
