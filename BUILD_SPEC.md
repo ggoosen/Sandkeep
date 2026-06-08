@@ -367,16 +367,16 @@ diff), printing the same accept/reject instructions as `run`.
 
 Leave `TODO(phase-N)` markers; do not implement until the phase is started.
 
-- **Phase 2 — Real isolation + parallelism:** microVM `SandboxProvider` (E2B / Firecracker / Docker Sandboxes); snapshot/restore; concurrency + warm pool; secret-injecting broker (agent never holds the key); proper brokering egress proxy; draft-PR human gate. Status in §16. **Network-off toggle implemented**; the rest is a hard infra wall (microVM/cloud/GitHub) — see §16.
-- **Phase 3 — Coordination & policy:** cross-task conflict detection; test-gated merge queue; diff risk analysis (flag workflow/deploy/auth/secret/dep changes); richer `policy.py`. Full status in §14. **Risk analysis + conflict detection implemented**; test-gated merge queue deferred (see §14).
+- **Phase 2 — Real isolation + parallelism:** microVM `SandboxProvider` (E2B / Firecracker / Docker Sandboxes); snapshot/restore; concurrency + warm pool; secret-injecting broker (agent never holds the key); proper brokering egress proxy; draft-PR human gate. Status in §16. **Done:** network toggle, concurrency, and an E2B microVM with **containment verified**. **Remaining:** egress allowlist proxy, secret broker, draft-PR gate, warm pool (infra-bound) — see §16.
+- **Phase 3 — Coordination & policy:** cross-task conflict detection; test-gated merge queue; diff risk analysis (flag workflow/deploy/auth/secret/dep changes); richer `policy.py`. Full status in §14. **All implemented** (risk analysis, conflict detection, test-gated merge).
 - **Phase 4 — Capability authoring:** agents author per-repo scoped skills inside their sandbox. Full status in §15. **Implemented** (authoring, per-repo store, injection).
-- **Phase 5 — Pluggable agents:** the hardwired `claude` CLI becomes one `AgentDriver` among several (Codex, Aider, …); `--agent`/config selection; per-agent images; per-agent secret env; diff-only contract fallback for agents that don't write `results.json`. Full design + status in §13. **Core seam implemented**; two pieces deferred (see §13).
+- **Phase 5 — Pluggable agents:** the hardwired `claude` CLI becomes one `AgentDriver` among several (Codex, Aider, …); `--agent`/config selection; per-agent images; per-agent secret env; diff-only contract fallback for agents that don't write `results.json`. Full design + status in §13. **Implemented** (seam, selection, per-agent images, multi-key auth); remaining: a real second driver with verified flags.
 
 ---
 
 ## 13. Pluggable agent drivers (Phase 5 — core implemented)
 
-> **Status.** Core seam built and tested (`src/sandkeep/agent/`, `tests/test_agent_driver.py`). The default Claude path is byte-identical behind the new interface; the full suite incl. the boundary suite passes. **Deferred** (clearly bounded, not faked): (a) per-agent **image templating** — `image build --agent <name>` errors for non-default agents until the Dockerfile is rendered from `driver.install_steps()`; (b) per-agent **secret storage** — `auth set --agent <name>`; the first cut forwards `driver.secret_env` from the host shell. Shipping a real second driver (Codex/Aider) needs its CLI flags verified at build time, same discipline as §6.
+> **Status.** Core seam built and tested (`src/sandkeep/agent/`, `tests/test_agent_driver.py`); default Claude path byte-identical behind the interface. **Per-agent image templating** is now implemented (`render_dockerfile`/`build_agent_image`; `image build --agent <name>` renders from `driver.install_steps()`; runs select `cfg.image_for(agent)`). **Per-agent secret storage** is covered by the multi-key `sandkeep auth set <NAME>` CLI. **Remaining:** shipping a real second driver (Codex/Aider) — needs its CLI flags verified at build time against the actual tool, same discipline as §6.
 
 The boundary is **agent-agnostic**: containment comes from the sandbox, not from which agent runs inside it (the boundary suite, §9–§10, proves this without reference to Claude). So any file-editing CLI agent can run in the box and inherit the same guarantees. Phase 5 makes that explicit.
 
@@ -426,7 +426,7 @@ class AgentDriver(ABC):
 
 ## 14. Coordination & policy (Phase 3 — core implemented)
 
-> **Status.** Implemented: diff **risk analysis** and cross-task **conflict detection** (`src/sandkeep/policy.py`, `tests/test_policy.py`, controller + CLI wiring). **Deferred:** the **test-gated merge queue** — running the target repo's tests against a patch — because tests must run on agent-touched code, which the golden rule forbids on the host. It therefore needs a *sandboxed* test run (re-provision → apply patch → run a configured test command inside → gate on exit). That reuses Phase 1 provisioning but adds a per-repo test-command config; built when prioritized.
+> **Status.** Implemented: diff **risk analysis** + cross-task **conflict detection** (`policy.py`) and the **test-gated merge queue** (`controller.run_tests` + `accept(test_command=...)`, `sandkeep test`, `SANDKEEP_TEST_COMMAND`). The test gate runs the command **inside the task's still-alive sandbox** against the agent's actual changes (never on the host — golden rule); `accept` is refused if it fails and the task stays at REVIEW. Tests in `test_policy.py` + `test_controller.py`.
 
 `policy.py` is host-side and deterministic: it never runs agent code, it only reads the diff that already crossed back. It is **advisory** — it informs the human gate, it does not auto-block (the gate is still the human's call).
 
@@ -480,21 +480,29 @@ CLI: `sandkeep skills list --repo <path>` shows a repo's registered skills.
 
 ## 16. Real isolation + parallelism (Phase 2 — slice implemented; rest is an infra wall)
 
-> **Status.** Only one slice is honestly buildable + testable on a dev machine: the **network-off toggle** (`SANDKEEP_NETWORK` / `--no-network`, `src/sandkeep/config.py` + `cli.py`, `tests/test_network.py`). Everything else in Phase 2 needs infrastructure this repo can't provision and is **deliberately not stubbed** — config-only stubs would imply security guarantees that don't exist, which is the exact anti-pattern Sandkeep warns about.
+> **Status.** Implemented: the **network-off toggle** (`SANDKEEP_NETWORK`/`--no-network`), **concurrency** (`sandkeep batch`, `run_concurrent`, thread-safe store), and a **microVM backend whose containment is verified** (E2B, boundary suite 9/9 — `e2b_provider.py`, `SANDKEEP_BACKEND=e2b`). Remaining Phase 2 pieces (egress allowlist proxy, secret broker, draft-PR gate, warm pool) need infrastructure this repo can't provision and are **deliberately not stubbed** — a config-only stub would imply a security guarantee that doesn't exist, the exact anti-pattern Sandkeep warns about.
 
 ### Implemented: network toggle
 
 The Docker provider already supports `--network none`; Phase 2 exposes it. `network` is config (`SANDKEEP_NETWORK`, default `egress`) with a `--no-network` override on `run`/`shell` (precedence flag > env > default). `none` = the boundary-test posture: the agent cannot reach its API, so a normal run will fail — it's for boundary testing or a future offline/local-model agent. The CLI warns when network is off. `egress` remains the open bridge.
 
+### Implemented: concurrency
+
+`sandkeep batch --repo R --task … [--tasks-file f] [--max-parallel N]` runs many tasks in parallel (`controller.run_concurrent`), each in its own sandbox, all landing at the gate. `StateStore` is thread-safe (one shared connection + reentrant lock) and `AuditLog` serializes its appends, so concurrent tasks don't corrupt state; a per-task host-side error is captured rather than sinking the batch. Tests in `test_concurrency.py`.
+
+### Implemented: microVM backend (E2B) — containment verified
+
+`SANDKEEP_BACKEND=e2b` runs each task in an E2B Firecracker microVM (`e2b_provider.py`). The adversarial boundary suite passes **9/9 isolation checks** against a real microVM (`SANDKEEP_TEST_BACKEND=e2b pytest tests/test_boundary.py`); `allow_internet_access=False` gives a true no-network posture, and `/src` is built as root / read-only with a non-root agent. The 2 remaining suite reds are tool-presence (the custom template needs an E2B access token to build), not containment gaps. See docs/phase-2-implementation.md → "Verifying the E2B backend".
+
 ### Deferred — needs infrastructure, NOT stubbed (and why)
 
 | Piece | Why it can't be built/tested here | Why no stub |
 |---|---|---|
-| **microVM `SandboxProvider`** (Firecracker/E2B) | **candidate code shipped** (`e2b_provider.py`, `SANDKEEP_BACKEND=e2b`) but **unverified** — the boundary suite needs an E2B account to run against | not a stub: it's real, runnable code marked NOT-VERIFIED until `SANDKEEP_TEST_BACKEND=e2b pytest tests/test_boundary.py` is green (see docs/phase-2-implementation.md → "Verifying the E2B backend") |
-| **brokering egress *allowlist* proxy** | needs a real proxy enforcing per-host rules | an unenforced allowlist config reads as "exfil is blocked" when it isn't |
+| **microVM `SandboxProvider`** (E2B) | ✅ **shipped + containment verified** — boundary suite 9/9 on a real E2B microVM. 2 remaining reds are tool-presence (claude/curl in a custom template, needs an E2B *access token* to build), not leaks | n/a — real, verified code |
+| **brokering egress *allowlist* proxy** | needs a real proxy enforcing per-host rules (E2B's `SandboxNetworkOpts` may make this cheaper than a separate proxy — worth investigating) | an unenforced allowlist config reads as "exfil is blocked" when it isn't |
 | **secret-injecting broker** (agent never holds the key) | needs the proxy to inject creds out-of-band | a config flag can't stop the agent seeing an env var; pretending it does is false security |
 | **draft-PR human gate** | needs a GitHub remote + auth | nothing to test against locally |
-| **concurrency + warm pool / snapshot-restore** | large architectural change; value is coupled to the microVM | premature without the real backend |
+| **warm pool / snapshot-restore** | Docker mounts the repo at create() so a pre-provisioned pool can't hold it; fits E2B's upload model | premature without the microVM as the default backend |
 
 Each remains marked `TODO(phase-2)` in code. The `SandboxProvider` ABC (§4) is the seam: a microVM backend drops in there and **must pass the unmodified boundary suite** (§9–§10) — that contract is what makes the deferral safe.
 

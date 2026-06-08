@@ -70,7 +70,11 @@ sandkeep run --repo /path/to/repo --task "Add input validation to parse_config()
 # inside the sandbox, on a throwaway clone — exits at the same review gate
 sandkeep shell --repo /path/to/repo
 
+# OR many tasks at once, each in its own sandbox, all landing at the gate
+sandkeep batch --repo /path/to/repo --task "fix A" --task "fix B" --max-parallel 4
+
 sandkeep show <task_id>              # review summary + patch + risk flags + conflicts
+sandkeep test <task_id> --test-cmd "pytest -q"   # run the tests in the sandbox
 sandkeep accept <task_id>            # apply to a fresh branch on your repo
 # or
 sandkeep reject <task_id>            # discard and tear down the sandbox
@@ -171,12 +175,12 @@ the Docker dependency.
 
 - [x] Phase 0 — boundary proof (Docker mechanics)
 - [x] Phase 1 — single governed task loop (`run` + interactive `shell`, human gate)
-- [~] Phase 2 — real isolation + parallelism. **Done:** network-off toggle (`--no-network`). **Pending infra:** microVM backend, brokering egress-allowlist proxy, secret broker, draft-PR gate (need KVM/cloud/GitHub; deliberately not stubbed)
-- [x] Phase 3 — diff risk analysis + cross-task conflict detection
+- [~] Phase 2 — real isolation + parallelism. **Done:** network-off toggle (`--no-network`), **concurrency** (`batch`), and an **E2B microVM backend with containment verified** (9/9 boundary tests). **Pending infra:** egress-allowlist proxy, secret broker, draft-PR gate, warm pool (need cloud/GitHub; deliberately not stubbed)
+- [x] Phase 3 — diff risk analysis, cross-task conflict detection, **test-gated merge**
 - [x] Phase 4 — per-repo skill authoring
-- [x] Phase 5 — pluggable agents (`--agent`, `AgentDriver` seam)
+- [x] Phase 5 — pluggable agents (`--agent`, `AgentDriver` seam, per-agent images)
 
-The build details for each phase live in [`BUILD_SPEC.md`](BUILD_SPEC.md) (§13–§16).
+The build details for each phase live in [`BUILD_SPEC.md`](BUILD_SPEC.md) (§13–§16); the microVM build/verify guide is [`docs/phase-2-implementation.md`](docs/phase-2-implementation.md).
 
 ## Cordon — the native sibling
 
