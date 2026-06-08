@@ -112,6 +112,15 @@ class DockerProvider(SandboxProvider):
             raise FileNotFoundError(f"{path} in sandbox {handle.id}: {result.stderr.strip()}")
         return result.stdout
 
+    def list_sandbox_ids(self) -> list[str]:
+        proc = self._run(
+            ["docker", "ps", "-a", "--filter", "name=sandkeep-", "--format", "{{.Names}}"],
+            timeout=30,
+        )
+        if proc.returncode != 0:
+            raise SandboxError(f"docker ps failed: {proc.stderr.decode(errors='replace')}")
+        return [n for n in proc.stdout.decode(errors="replace").split() if n.strip()]
+
     def destroy(self, handle: SandboxHandle) -> None:
         proc = self._run(["docker", "rm", "--force", "--volumes", handle.id], timeout=60)
         if proc.returncode != 0:

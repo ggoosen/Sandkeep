@@ -67,3 +67,12 @@ class SandboxProvider(ABC):
     @abstractmethod
     def destroy(self, handle: SandboxHandle) -> None:
         """Tear down and discard all sandbox state."""
+
+    def list_sandbox_ids(self) -> list[str]:
+        """All sandbox ids this backend currently holds (for `sandkeep ps`/`gc`).
+
+        Optional capability — backends that can't enumerate may leave it
+        unimplemented; gc/ps then report that listing isn't supported."""
+        raise NotImplementedError(
+            f"{type(self).__name__} does not support listing sandboxes"
+        )

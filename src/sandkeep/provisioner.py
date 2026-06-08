@@ -38,7 +38,29 @@ def provision(
     handle = provider.create(task.repo_path, env)
     store.update_fields(task.id, sandbox_id=handle.id)
     audit.log("sandbox_created", trace_id=trace_id, task_id=task.id, sandbox_id=handle.id)
+    # Once the container exists, ANY later failure must not leak it — clean up
+    # the sandbox we just created, then re-raise for the caller to handle.
+    try:
+        return _provision_clone(task, provider, handle, audit, trace_id=trace_id,
+                                exec_timeout=exec_timeout, store=store)
+    except BaseException:
+        try:
+            provider.destroy(handle)
+        except Exception:
+            pass  # best-effort; the original error is what matters
+        raise
 
+
+def _provision_clone(
+    task: Task,
+    provider: SandboxProvider,
+    handle: SandboxHandle,
+    audit: AuditLog,
+    *,
+    trace_id: str,
+    exec_timeout: int,
+    store: StateStore,
+) -> SandboxHandle:
     branch = task_branch(task.id)
     steps: list[list[str]] = [
         # /src is owned by a host/root uid the agent doesn't match; tell git

@@ -25,7 +25,7 @@ from . import agent_runner, diff, policy, results, skills
 from .agent import get_driver
 from .audit import AuditLog, new_trace_id
 from .config import Config, resource_path
-from .models import ResultsContract, Task, TaskState
+from .models import TERMINAL_STATES, ResultsContract, Task, TaskState
 from .provisioner import ProvisioningError, provision
 from .sandbox.base import SandboxError, SandboxHandle, SandboxProvider
 from .state_store import StateStore
@@ -34,6 +34,22 @@ from .violations import Violation, archive_sandbox, scan_agent_output
 
 class ControllerError(Exception):
     pass
+
+
+@dataclasses.dataclass
+class SandboxInfo:
+    """A live sandbox correlated with its task (for `sandkeep ps`/`gc`)."""
+
+    id: str
+    task_id: str | None
+    state: str | None  # task state value, or None if no task record
+    # classification: orphan (no task), stale (task already terminal),
+    # review (alive on purpose, the rollback target), active (running now)
+    kind: str
+
+    @property
+    def reapable(self) -> bool:
+        return self.kind in ("orphan", "stale")
 
 
 def run_concurrent(
@@ -468,6 +484,52 @@ class Controller:
             raise ControllerError(f"task is {task.state.value}, not review")
         self.store.update_state(task.id, TaskState.REJECTED, new_trace_id(), "human rejected")
         self._destroy_quietly(task)
+
+    # -- sandbox housekeeping (`sandkeep ps` / `gc`) ----------------------
+
+    def list_sandboxes(self) -> list[SandboxInfo]:
+        """Every live sandbox the backend holds, classified against the store:
+        orphan (no task), stale (task already terminal), review (alive on
+        purpose), active (running now)."""
+        by_sandbox = {
+            t.sandbox_id: t for t in self.store.list_tasks() if t.sandbox_id
+        }
+        infos: list[SandboxInfo] = []
+        for sid in sorted(self.provider.list_sandbox_ids()):
+            task = by_sandbox.get(sid)
+            if task is None:
+                infos.append(SandboxInfo(sid, None, None, "orphan"))
+            elif task.state in TERMINAL_STATES:
+                infos.append(SandboxInfo(sid, task.id, task.state.value, "stale"))
+            elif task.state is TaskState.REVIEW:
+                infos.append(SandboxInfo(sid, task.id, task.state.value, "review"))
+            else:
+                infos.append(SandboxInfo(sid, task.id, task.state.value, "active"))
+        return infos
+
+    def gc(self, *, include_review: bool = False, dry_run: bool = False) -> list[SandboxInfo]:
+        """Reap sandboxes that shouldn't be alive: orphans (no task) and stale
+        (task already terminal). With include_review, also reject + reap the
+        intentional REVIEW rollback targets. Never touches 'active' sandboxes
+        (a run may be in flight). Returns what was (or would be) reaped."""
+        targets = [
+            s for s in self.list_sandboxes()
+            if s.reapable or (include_review and s.kind == "review")
+        ]
+        if dry_run:
+            return targets
+        for s in targets:
+            if s.kind == "review" and s.task_id:
+                self.reject(s.task_id)  # proper transition + destroy
+            else:
+                self._destroy_handle(
+                    SandboxHandle(id=s.id, workdir="/work/repo"), s.task_id or "gc"
+                )
+            self.audit.log(
+                "sandbox_reaped", trace_id=new_trace_id(),
+                task_id=s.task_id, sandbox_id=s.id, kind=s.kind,
+            )
+        return targets
 
     # -- failure paths -------------------------------------------------------
 

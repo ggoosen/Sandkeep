@@ -80,6 +80,9 @@ sandkeep accept <task_id>            # apply to a fresh branch on your repo
 sandkeep reject <task_id>            # discard and tear down the sandbox
 
 sandkeep skills list --repo /path/to/repo   # skills the agent authored for this repo
+
+sandkeep ps                         # list live sandboxes + their task state
+sandkeep gc                         # reap orphaned/stale sandboxes (--dry-run to preview)
 ```
 
 Useful flags on `run`/`shell`:
