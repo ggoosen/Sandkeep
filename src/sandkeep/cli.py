@@ -327,6 +327,43 @@ def _cmd_skills(cfg: Config, args: argparse.Namespace) -> int:
     return 1
 
 
+def _cmd_ps(cfg: Config, args: argparse.Namespace) -> int:
+    controller = _make_controller(cfg, network="none")
+    try:
+        infos = controller.list_sandboxes()
+    except NotImplementedError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    if not infos:
+        print("no live sandboxes")
+        return 0
+    print(f"{'SANDBOX':40}  {'KIND':8}  {'STATE':12}  TASK")
+    for s in infos:
+        print(f"{s.id:40}  {s.kind:8}  {(s.state or '-'):12}  {s.task_id or '-'}")
+    reapable = sum(1 for s in infos if s.reapable)
+    if reapable:
+        print(f"\n{reapable} reapable (orphan/stale) — run `sandkeep gc`", file=sys.stderr)
+    return 0
+
+
+def _cmd_gc(cfg: Config, args: argparse.Namespace) -> int:
+    controller = _make_controller(cfg, network="none")
+    try:
+        reaped = controller.gc(include_review=args.include_review, dry_run=args.dry_run)
+    except NotImplementedError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    if not reaped:
+        print("nothing to reap" + ("" if args.include_review else
+              " (use --include-review to also reap abandoned review sandboxes)"))
+        return 0
+    verb = "would reap" if args.dry_run else "reaped"
+    for s in reaped:
+        print(f"  {verb}  {s.id}  ({s.kind}{', task ' + s.task_id if s.task_id else ''})")
+    print(f"\n{verb} {len(reaped)} sandbox(es)")
+    return 0
+
+
 def _cmd_status(cfg: Config, args: argparse.Namespace) -> int:
     controller = _make_controller(cfg, network="none")
     task = controller.store.get_task(args.task_id)
@@ -507,6 +544,13 @@ def build_parser() -> argparse.ArgumentParser:
     test.add_argument("--test-cmd", dest="test_cmd", default=None,
                       help="test command (overrides SANDKEEP_TEST_COMMAND)")
 
+    sub.add_parser("ps", help="list live sandboxes and their task state")
+    gc = sub.add_parser("gc", help="reap orphaned/stale sandboxes")
+    gc.add_argument("--include-review", action="store_true",
+                    help="also reap (reject) abandoned review sandboxes")
+    gc.add_argument("--dry-run", action="store_true",
+                    help="show what would be reaped without removing")
+
     return parser
 
 
@@ -524,6 +568,8 @@ def main(argv: list[str] | None = None) -> int:
             "shell": _cmd_shell,
             "skills": _cmd_skills,
             "test": _cmd_test,
+            "ps": _cmd_ps,
+            "gc": _cmd_gc,
             "status": _cmd_status,
             "show": _cmd_show,
             "accept": _cmd_accept,

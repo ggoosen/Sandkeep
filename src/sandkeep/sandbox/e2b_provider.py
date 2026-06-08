@@ -190,6 +190,18 @@ class E2BProvider(SandboxProvider):
         except self._TimeoutExc as e:
             raise SandboxExecTimeout(f"timed out after {timeout}s: {cmd!r}") from e
 
+    def list_sandbox_ids(self) -> list[str]:
+        try:
+            running = self._Sandbox.list()
+        except Exception as exc:
+            raise SandboxError(f"E2B list failed: {exc}") from exc
+        ids = []
+        for item in running:
+            sid = getattr(item, "sandbox_id", None) or getattr(item, "id", None)
+            if sid:
+                ids.append(sid)
+        return ids
+
     def read_file(self, handle: SandboxHandle, path: str) -> str:
         sbx = self._connect(handle.id)
         try:

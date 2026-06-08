@@ -116,12 +116,40 @@ def host_repo(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def sandbox(provider: DockerProvider, store, audit, host_repo: Path):
-    """A provisioned sandbox for a real task; destroyed afterwards."""
+    """A provisioned sandbox for a real task; always destroyed afterwards
+    (even if the test body raises). provision() now cleans up its own
+    container on a provisioning failure, so a failed provision can't leak."""
     from sandkeep.audit import new_trace_id
     from sandkeep.provisioner import provision
 
     t = Task(id=uuid.uuid4().hex, repo_path=str(host_repo), instruction="test task")
     store.create_task(t, new_trace_id())
     handle = provision(t, provider, store, audit, env={}, trace_id=new_trace_id())
-    yield t, handle
-    provider.destroy(handle)
+    try:
+        yield t, handle
+    finally:
+        try:
+            provider.destroy(handle)
+        except Exception:
+            pass
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _reap_session_sandboxes():
+    """Safety net: remove any sandkeep-* containers CREATED DURING this test
+    session (by diffing the set before/after), so a leaked test never litters
+    Docker — without touching the user's own live sandboxes."""
+    def _ids() -> set[str]:
+        if shutil.which("docker") is None:
+            return set()
+        out = subprocess.run(
+            ["docker", "ps", "-aq", "--filter", "name=sandkeep-", "--format", "{{.Names}}"],
+            capture_output=True, text=True,
+        )
+        return {n for n in out.stdout.split() if n.strip()}
+
+    before = _ids()
+    yield
+    leaked = _ids() - before
+    if leaked:
+        subprocess.run(["docker", "rm", "-f", "-v", *leaked], capture_output=True)
