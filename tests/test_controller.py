@@ -218,3 +218,39 @@ def test_conflicts_detected_between_two_review_tasks(
     assert any("parse_config.py" in c.files for c in conflicts)
     controller.reject(first.id)
     controller.reject(second.id)
+
+
+# -- Phase 3: test-gated merge -------------------------------------------
+
+
+def test_run_tests_executes_in_sandbox(controller, store, host_repo, monkeypatch):
+    _stub_agent(monkeypatch, _do_work)
+    task = controller.run_task(str(host_repo), "add validation")
+    # the agent's change is present in the sandbox working tree
+    code, _ = controller.run_tests(task, "test -f parse_config.py")
+    assert code == 0
+    code, _ = controller.run_tests(task, "exit 7")
+    assert code == 7
+    controller.reject(task.id)
+
+
+def test_accept_passing_test_gate_merges(controller, store, host_repo, monkeypatch):
+    _stub_agent(monkeypatch, _do_work)
+    task = controller.run_task(str(host_repo), "add validation")
+    sha = controller.accept(task.id, test_command="grep -q validated parse_config.py")
+    assert sha
+    assert store.get_task(task.id).state is TaskState.MERGED
+
+
+def test_accept_failing_test_gate_refuses_and_stays_in_review(
+    controller, store, host_repo, monkeypatch
+):
+    _stub_agent(monkeypatch, _do_work)
+    task = controller.run_task(str(host_repo), "add validation")
+    with pytest.raises(ControllerError, match="test gate failed"):
+        controller.accept(task.id, test_command="exit 1")
+    # not merged, still reviewable, sandbox still alive as the rollback target
+    assert store.get_task(task.id).state is TaskState.REVIEW
+    assert _container_exists(task.sandbox_id)
+    assert "tests_run" in controller.audit.path.read_text()
+    controller.reject(task.id)

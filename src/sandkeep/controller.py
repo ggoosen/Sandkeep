@@ -380,11 +380,37 @@ class Controller:
 
     # -- human gate --------------------------------------------------------
 
-    def accept(self, task_id: str) -> str:
-        """Apply the patch to a fresh host branch; returns the commit sha."""
+    def run_tests(self, task: Task, test_command: str) -> tuple[int, str]:
+        """Run a test command INSIDE the task's (still-alive) sandbox, against
+        the agent's actual changes — never on the host (golden rule). Returns
+        (exit_code, combined output). BUILD_SPEC §14 test-gated merge."""
+        if not task.sandbox_id:
+            raise ControllerError("no live sandbox for task (already torn down?)")
+        handle = SandboxHandle(id=task.sandbox_id, workdir="/work/repo")
+        result = self.provider.exec(
+            handle, ["sh", "-c", f"cd /work/repo && {test_command}"],
+            timeout=self.config.task_timeout_seconds,
+        )
+        self.audit.log(
+            "tests_run", trace_id=new_trace_id(), task_id=task.id,
+            command=test_command, exit_code=result.exit_code,
+        )
+        return result.exit_code, (result.stdout + result.stderr)
+
+    def accept(self, task_id: str, *, test_command: str | None = None) -> str:
+        """Apply the patch to a fresh host branch; returns the commit sha. If
+        test_command is given, it must pass IN THE SANDBOX first or accept is
+        refused (the task stays at REVIEW)."""
         task = self.store.get_task(task_id)
         if task.state is not TaskState.REVIEW:
             raise ControllerError(f"task is {task.state.value}, not review")
+        if test_command:
+            code, output = self.run_tests(task, test_command)
+            if code != 0:
+                raise ControllerError(
+                    f"test gate failed (exit {code}); not merging — task stays at "
+                    f"review. Output (tail):\n{output[-1500:]}"
+                )
         branch = f"sandkeep-accepted/{task.id}"
         sha = diff.apply_to_fresh_branch(
             task.repo_path, task.base_ref, branch, Path(task.patch_path),

@@ -36,6 +36,9 @@ class Config:
     network: str = DEFAULT_NETWORK
     backend: str = DEFAULT_BACKEND
     e2b_template: str = DEFAULT_E2B_TEMPLATE
+    # Optional test-gated merge: a command run INSIDE the sandbox against the
+    # agent's changes before `accept` will merge (BUILD_SPEC §14). Empty = off.
+    test_command: str = ""
     max_turns: int = DEFAULT_MAX_TURNS
     task_timeout_seconds: int = DEFAULT_TASK_TIMEOUT_SECONDS
     exec_timeout_seconds: int = DEFAULT_EXEC_TIMEOUT_SECONDS
@@ -57,6 +60,7 @@ class Config:
                 f"SANDKEEP_BACKEND must be one of {BACKENDS}, got {cfg.backend!r}"
             )
         cfg.e2b_template = os.environ.get("SANDKEEP_E2B_TEMPLATE", cfg.e2b_template)
+        cfg.test_command = os.environ.get("SANDKEEP_TEST_COMMAND", cfg.test_command)
         if "SANDKEEP_MAX_TURNS" in os.environ:
             cfg.max_turns = int(os.environ["SANDKEEP_MAX_TURNS"])
         if "SANDKEEP_TASK_TIMEOUT" in os.environ:
