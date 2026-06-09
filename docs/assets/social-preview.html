@@ -1,0 +1,87 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html,body { width:1280px; height:640px; }
+  body {
+    font-family: -apple-system, "Segoe UI", Inter, Roboto, sans-serif;
+    background:
+      radial-gradient(1100px 520px at 78% -10%, rgba(235,108,54,0.16), transparent 60%),
+      radial-gradient(800px 600px at 0% 120%, rgba(120,160,255,0.08), transparent 55%),
+      #0c0f14;
+    color:#e8edf4;
+    position:relative;
+    overflow:hidden;
+  }
+  /* faint grid */
+  body::before{
+    content:""; position:absolute; inset:0;
+    background-image:
+      linear-gradient(rgba(255,255,255,0.035) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,0.035) 1px, transparent 1px);
+    background-size:46px 46px;
+    mask-image: radial-gradient(900px 600px at 70% 40%, black, transparent 80%);
+  }
+  .wrap{ position:relative; height:100%; padding:74px 84px; display:flex; flex-direction:column; }
+  .brand{ display:flex; align-items:center; gap:18px; }
+  .logo{
+    width:54px; height:54px; border-radius:14px;
+    background:linear-gradient(145deg,#eb6c36,#b6431a);
+    box-shadow:0 8px 30px rgba(235,108,54,0.4), inset 0 1px 0 rgba(255,255,255,0.35);
+    position:relative;
+  }
+  .logo::after{
+    content:""; position:absolute; inset:14px;
+    border:3px solid rgba(12,15,20,0.85); border-radius:5px;
+  }
+  .name{ font-size:34px; font-weight:800; letter-spacing:-0.5px; }
+  .alpha{
+    margin-left:6px; font-size:13px; font-weight:700; letter-spacing:1.5px;
+    color:#ffcaa8; border:1px solid rgba(235,108,54,0.5);
+    padding:5px 11px; border-radius:999px; text-transform:uppercase;
+  }
+  h1{
+    margin-top:54px; font-size:62px; line-height:1.08; font-weight:800;
+    letter-spacing:-1.6px; max-width:1040px;
+  }
+  h1 .hl{ color:#ff8a54; }
+  .sub{ margin-top:26px; font-size:25px; line-height:1.45; color:#aab4c2; max-width:880px; font-weight:450; }
+  .flow{ margin-top:auto; display:flex; align-items:center; gap:18px; }
+  .pill{
+    font-size:21px; font-weight:650; color:#e8edf4;
+    background:rgba(255,255,255,0.055); border:1px solid rgba(255,255,255,0.12);
+    padding:13px 24px; border-radius:12px;
+  }
+  .arr{ color:#566173; font-size:24px; font-weight:700; }
+  .foot{
+    position:absolute; right:84px; bottom:74px;
+    font-size:19px; color:#7b8696; font-weight:600; text-align:right;
+  }
+  .foot b{ color:#cdd6e2; font-weight:700; }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="brand">
+      <div class="logo"></div>
+      <div class="name">Sandkeep</div>
+      <div class="alpha">Alpha</div>
+    </div>
+
+    <h1>Run <span class="hl">Claude Code agents</span><br>in disposable sandboxes.</h1>
+    <div class="sub">One sandbox per task. The git worktree lives inside it — only a reviewed diff comes back out, and a human gates every merge.</div>
+
+    <div class="flow">
+      <div class="pill">isolate</div>
+      <div class="arr">→</div>
+      <div class="pill">review</div>
+      <div class="arr">→</div>
+      <div class="pill">gate</div>
+    </div>
+
+    <div class="foot"><b>pip install sandkeep</b><br>github.com/ggoosen/Sandkeep</div>
+  </div>
+</body>
+</html>

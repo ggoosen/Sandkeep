@@ -209,7 +209,8 @@ freely for any **noncommercial** purpose (personal, research, education,
 non-profit, evaluation).
 
 **Commercial use of any kind requires a paid license.** If you want to use
-Sandkeep in or for a commercial product, service, or business, contact
-**info@elusivecoffee.com.au** to arrange one.
+Sandkeep in or for a commercial product, service, or business,
+[open an issue](https://github.com/ggoosen/Sandkeep/issues/new) to get in touch
+and arrange one.
 
 See [NOTICE](NOTICE) for attribution requirements.

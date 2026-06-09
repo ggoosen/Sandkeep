@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 license = "LicenseRef-PolyForm-Noncommercial-1.0.0"
 license-files = ["LICENSE", "NOTICE"]
-authors = [{ name = "George Goosen", email = "info@elusivecoffee.com.au" }]
+authors = [{ name = "George Goosen" }]
 keywords = ["claude", "agents", "sandbox", "isolation", "orchestration", "llm"]
 classifiers = [
     "Development Status :: 3 - Alpha",
