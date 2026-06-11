@@ -1,0 +1,194 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1340" height="910" viewBox="0 0 1340 910" font-family="-apple-system, Segoe UI, Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="ar_g" markerWidth="10" markerHeight="8" refX="8" refY="4" orient="auto" markerUnits="userSpaceOnUse">
+      <path d="M0,0 L9,4 L0,8 Z" fill="#7d8b9c"/>
+    </marker>
+    <marker id="ar_o" markerWidth="10" markerHeight="8" refX="8" refY="4" orient="auto" markerUnits="userSpaceOnUse">
+      <path d="M0,0 L9,4 L0,8 Z" fill="#eb6c36"/>
+    </marker>
+    <marker id="ar_gn" markerWidth="10" markerHeight="8" refX="8" refY="4" orient="auto" markerUnits="userSpaceOnUse">
+      <path d="M0,0 L9,4 L0,8 Z" fill="#46b27f"/>
+    </marker>
+    <marker id="ar_gd" markerWidth="10" markerHeight="8" refX="8" refY="4" orient="auto" markerUnits="userSpaceOnUse">
+      <path d="M0,0 L9,4 L0,8 Z" fill="#d4a843"/>
+    </marker>
+  </defs>
+  <rect x="0" y="0" width="1340" height="910" fill="#0c0f14"/>
+  <g stroke="#ffffff" stroke-opacity="0.03">
+    <line x1="0" y1="0" x2="0" y2="910"/>
+    <line x1="48" y1="0" x2="48" y2="910"/>
+    <line x1="96" y1="0" x2="96" y2="910"/>
+    <line x1="144" y1="0" x2="144" y2="910"/>
+    <line x1="192" y1="0" x2="192" y2="910"/>
+    <line x1="240" y1="0" x2="240" y2="910"/>
+    <line x1="288" y1="0" x2="288" y2="910"/>
+    <line x1="336" y1="0" x2="336" y2="910"/>
+    <line x1="384" y1="0" x2="384" y2="910"/>
+    <line x1="432" y1="0" x2="432" y2="910"/>
+    <line x1="480" y1="0" x2="480" y2="910"/>
+    <line x1="528" y1="0" x2="528" y2="910"/>
+    <line x1="576" y1="0" x2="576" y2="910"/>
+    <line x1="624" y1="0" x2="624" y2="910"/>
+    <line x1="672" y1="0" x2="672" y2="910"/>
+    <line x1="720" y1="0" x2="720" y2="910"/>
+    <line x1="768" y1="0" x2="768" y2="910"/>
+    <line x1="816" y1="0" x2="816" y2="910"/>
+    <line x1="864" y1="0" x2="864" y2="910"/>
+    <line x1="912" y1="0" x2="912" y2="910"/>
+    <line x1="960" y1="0" x2="960" y2="910"/>
+    <line x1="1008" y1="0" x2="1008" y2="910"/>
+    <line x1="1056" y1="0" x2="1056" y2="910"/>
+    <line x1="1104" y1="0" x2="1104" y2="910"/>
+    <line x1="1152" y1="0" x2="1152" y2="910"/>
+    <line x1="1200" y1="0" x2="1200" y2="910"/>
+    <line x1="1248" y1="0" x2="1248" y2="910"/>
+    <line x1="1296" y1="0" x2="1296" y2="910"/>
+    <line x1="0" y1="0" x2="1340" y2="0"/>
+    <line x1="0" y1="48" x2="1340" y2="48"/>
+    <line x1="0" y1="96" x2="1340" y2="96"/>
+    <line x1="0" y1="144" x2="1340" y2="144"/>
+    <line x1="0" y1="192" x2="1340" y2="192"/>
+    <line x1="0" y1="240" x2="1340" y2="240"/>
+    <line x1="0" y1="288" x2="1340" y2="288"/>
+    <line x1="0" y1="336" x2="1340" y2="336"/>
+    <line x1="0" y1="384" x2="1340" y2="384"/>
+    <line x1="0" y1="432" x2="1340" y2="432"/>
+    <line x1="0" y1="480" x2="1340" y2="480"/>
+    <line x1="0" y1="528" x2="1340" y2="528"/>
+    <line x1="0" y1="576" x2="1340" y2="576"/>
+    <line x1="0" y1="624" x2="1340" y2="624"/>
+    <line x1="0" y1="672" x2="1340" y2="672"/>
+    <line x1="0" y1="720" x2="1340" y2="720"/>
+    <line x1="0" y1="768" x2="1340" y2="768"/>
+    <line x1="0" y1="816" x2="1340" y2="816"/>
+    <line x1="0" y1="864" x2="1340" y2="864"/>
+  </g>
+  <text x="40" y="34" font-size="23" font-weight="700" fill="#e9eef5">Sandkeep</text>
+  <text x="158" y="34" font-size="15" font-weight="600" fill="#eb6c36">isolate → review → gate</text>
+  <text x="40" y="54" font-size="13" fill="#8b97a6">Run Claude Code agents in disposable sandboxes — one per task. Only a reviewed diff returns; nothing touches your repo until a human accepts.</text>
+  <rect x="30" y="60" width="310" height="565" rx="12" fill="#10151c" fill-opacity="0.55" stroke="#33404f" stroke-width="1.4"/>
+  <text x="46" y="84" font-size="13" font-weight="700" fill="#aeb9c7" letter-spacing="0.5">HOST</text>
+  <text x="90.0" y="84" font-size="11" fill="#6c7886">· trusted controller</text>
+  <rect x="355" y="60" width="220" height="320" rx="12" fill="#10151c" fill-opacity="0.55" stroke="#33404f" stroke-width="1.4"/>
+  <text x="371" y="84" font-size="13" font-weight="700" fill="#aeb9c7" letter-spacing="0.5">PLUGGABLE BACKENDS</text>
+  <rect x="590" y="60" width="410" height="565" rx="12" fill="#10151c" fill-opacity="0.55" stroke="#3a4858" stroke-width="1.4" stroke-dasharray="7,5"/>
+  <text x="606" y="84" font-size="13" font-weight="700" fill="#c98a63" letter-spacing="0.5">DISPOSABLE SANDBOX</text>
+  <text x="762.0" y="84" font-size="11" fill="#6c7886">· isolation boundary</text>
+  <rect x="1080" y="60" width="230" height="565" rx="12" fill="#10151c" fill-opacity="0.55" stroke="#33404f" stroke-width="1.4"/>
+  <text x="1096" y="84" font-size="13" font-weight="700" fill="#aeb9c7" letter-spacing="0.5">HUMAN GATE</text>
+  <rect x="30" y="730" width="1280" height="150" rx="12" fill="#10151c" fill-opacity="0.55" stroke="#33404f" stroke-width="1.4" stroke-dasharray="7,5"/>
+  <text x="46" y="754" font-size="13" font-weight="700" fill="#aeb9c7" letter-spacing="0.5">ROADMAP</text>
+  <text x="114.0" y="754" font-size="11" fill="#6c7886">· deliberately NOT built — no false-security stubs</text>
+  <path d="M 170,133 L 190,133" fill="none" stroke="#7d8b9c" stroke-width="1.6" marker-end="url(#ar_g)" stroke-linejoin="round"/>
+  <path d="M 232,156 L 150,178" fill="none" stroke="#7d8b9c" stroke-width="1.6" marker-end="url(#ar_g)" stroke-linejoin="round"/>
+  <path d="M 282,156 L 250,178" fill="none" stroke="#7d8b9c" stroke-width="1.6" marker-end="url(#ar_g)" stroke-linejoin="round"/>
+  <path d="M 185,222 L 348,222 L 348,196 L 370,196" fill="none" stroke="#7d8b9c" stroke-width="1.6" marker-end="url(#ar_g)" stroke-linejoin="round"/>
+  <text x="268" y="213" font-size="10" fill="#8b97a6" text-anchor="middle" font-weight="400">selects backend</text>
+  <path d="M 575,168 L 590,168" fill="none" stroke="#7d8b9c" stroke-width="1.6" marker-end="url(#ar_g)" stroke-linejoin="round"/>
+  <text x="548" y="150" font-size="10" fill="#8b97a6" text-anchor="middle" font-weight="400">provision</text>
+  <text x="548" y="162" font-size="9" fill="#6f7b8a" text-anchor="middle" font-weight="400">(microVM/container)</text>
+  <path d="M 240,430 L 240,655 L 595,655 L 595,170 L 608,170" fill="none" stroke="#d4a843" stroke-width="1.6" stroke-dasharray="6,4" marker-end="url(#ar_gd)" stroke-linejoin="round"/>
+  <text x="415" y="648" font-size="11" fill="#d4a843" text-anchor="middle" font-weight="400">read-only clone</text>
+  <path d="M 695,200 L 695,226" fill="none" stroke="#7d8b9c" stroke-width="1.5" marker-end="url(#ar_g)" stroke-linejoin="round"/>
+  <path d="M 800,162 L 784,170" fill="none" stroke="#7d8b9c" stroke-width="1.5" marker-end="url(#ar_g)" stroke-linejoin="round"/>
+  <text x="792" y="150" font-size="10" fill="#8b97a6" text-anchor="middle" font-weight="400">edits</text>
+  <path d="M 985,165 L 1093,165" fill="none" stroke="#eb6c36" stroke-width="3.0" marker-end="url(#ar_o)" stroke-linejoin="round"/>
+  <path d="M 1110,332 L 1110,690 L 200,690 L 200,432" fill="none" stroke="#46b27f" stroke-width="1.8" marker-end="url(#ar_gn)" stroke-linejoin="round"/>
+  <text x="360" y="683" font-size="11" fill="#46b27f" text-anchor="middle" font-weight="400">on accept → FRESH branch (read-write)</text>
+  <path d="M 1168,214 L 1150,250" fill="none" stroke="#7d8b9c" stroke-width="1.5" marker-end="url(#ar_g)" stroke-linejoin="round"/>
+  <path d="M 1228,214 L 1248,250" fill="none" stroke="#7d8b9c" stroke-width="1.5" marker-end="url(#ar_g)" stroke-linejoin="round"/>
+  <path d="M 1142,332 L 1142,352" fill="none" stroke="#7d8b9c" stroke-width="1.4" marker-end="url(#ar_g)" stroke-linejoin="round"/>
+  <rect x="990" y="120" width="118" height="34" rx="6" fill="#1a120c" stroke="#eb6c36" stroke-width="1.1"/>
+  <text x="1049" y="135" font-size="10.5" fill="#ffb892" text-anchor="middle" font-weight="600">patch.diff + results.json</text>
+  <text x="1049" y="148" font-size="9.5" fill="#eb6c36" text-anchor="middle" font-weight="400">ONLY this leaves</text>
+  <rect x="50" y="110" width="120" height="46" rx="8" fill="#161d27" stroke="#3a4654" stroke-width="1.3"/>
+  <text x="110.0" y="132" font-size="14" font-weight="650" fill="#e9eef5" text-anchor="middle">CLI</text>
+  <text x="110.0" y="148" font-size="11" fill="#93a0b0" text-anchor="middle">sandkeep</text>
+  <rect x="190" y="110" width="130" height="46" rx="8" fill="#161d27" stroke="#3a4654" stroke-width="1.3"/>
+  <text x="255.0" y="132" font-size="14" font-weight="650" fill="#e9eef5" text-anchor="middle">Controller</text>
+  <text x="255.0" y="148" font-size="11" fill="#93a0b0" text-anchor="middle">deterministic</text>
+  <rect x="50" y="178" width="135" height="86" rx="8" fill="#161d27" stroke="#3a4654" stroke-width="1.3"/>
+  <text x="117.5" y="200" font-size="14" font-weight="650" fill="#e9eef5" text-anchor="middle">SandboxProvider</text>
+  <text x="117.5" y="216" font-size="11" fill="#93a0b0" text-anchor="middle">backend seam</text>
+  <text x="117.5" y="231" font-size="11" fill="#93a0b0" text-anchor="middle">(abstract)</text>
+  <rect x="195" y="178" width="125" height="86" rx="8" fill="#161d27" stroke="#3a4654" stroke-width="1.3"/>
+  <text x="257.5" y="200" font-size="14" font-weight="650" fill="#e9eef5" text-anchor="middle">AgentDriver</text>
+  <text x="257.5" y="216" font-size="11" fill="#93a0b0" text-anchor="middle">agent seam</text>
+  <text x="257.5" y="231" font-size="11" fill="#93a0b0" text-anchor="middle">(abstract)</text>
+  <rect x="50" y="288" width="270" height="60" rx="8" fill="#161d27" stroke="#3a4654" stroke-width="1.3"/>
+  <text x="185.0" y="310" font-size="14" font-weight="650" fill="#e9eef5" text-anchor="middle">SQLite</text>
+  <text x="185.0" y="326" font-size="11" fill="#93a0b0" text-anchor="middle">state machine + audit log</text>
+  <text x="185.0" y="341" font-size="11" fill="#93a0b0" text-anchor="middle">every transition · trace id</text>
+  <rect x="50" y="364" width="270" height="66" rx="8" fill="#161d27" stroke="#3a4654" stroke-width="1.3"/>
+  <text x="185.0" y="386" font-size="14" font-weight="650" fill="#e9eef5" text-anchor="middle">Host repo</text>
+  <text x="185.0" y="402" font-size="11" fill="#93a0b0" text-anchor="middle">mounted READ-ONLY</text>
+  <rect x="289" y="392" width="17" height="13" rx="2" fill="#d4a843"/>
+  <path d="M292,392 v-4 a5.5,5.5 0 0 1 11,0 v4" fill="none" stroke="#d4a843" stroke-width="2"/>
+  <rect x="50" y="452" width="270" height="120" rx="8" fill="#11161d" stroke="#2c3742" stroke-width="1.1" stroke-dasharray="5,4"/>
+  <text x="185" y="478" font-size="11.5" fill="#8893a3" text-anchor="middle" font-weight="600">Scripts own the filesystem;</text>
+  <text x="185" y="500" font-size="11.5" fill="#8893a3" text-anchor="middle" font-weight="600">agents own the code.</text>
+  <text x="185" y="522" font-size="10.5" fill="#8893a3" text-anchor="middle" font-weight="400">The controller is deterministic and</text>
+  <text x="185" y="544" font-size="10.5" fill="#8893a3" text-anchor="middle" font-weight="400">never runs agent-generated code.</text>
+  <rect x="372" y="108" width="185" height="78" rx="8" fill="#161d27" stroke="#4a3f3a" stroke-width="1.3"/>
+  <text x="464.5" y="130" font-size="14" font-weight="650" fill="#e9eef5" text-anchor="middle">Docker provider</text>
+  <text x="464.5" y="146" font-size="11" fill="#93a0b0" text-anchor="middle">mechanics harness —</text>
+  <text x="464.5" y="161" font-size="11" fill="#93a0b0" text-anchor="middle">NOT a security boundary</text>
+  <rect x="372" y="206" width="185" height="92" rx="8" fill="#161d27" stroke="#34503f" stroke-width="1.3"/>
+  <text x="464.5" y="228" font-size="14" font-weight="650" fill="#e9eef5" text-anchor="middle">E2B microVM</text>
+  <text x="464.5" y="244" font-size="11" fill="#93a0b0" text-anchor="middle">real boundary</text>
+  <text x="464.5" y="259" font-size="11" fill="#93a0b0" text-anchor="middle">containment verified (9/9)</text>
+  <rect x="608" y="140" width="170" height="60" rx="8" fill="#161d27" stroke="#3a4654" stroke-width="1.3"/>
+  <text x="693.0" y="162" font-size="14" font-weight="650" fill="#e9eef5" text-anchor="middle">Independent clone</text>
+  <text x="693.0" y="178" font-size="11" fill="#93a0b0" text-anchor="middle">task branch</text>
+  <rect x="608" y="226" width="170" height="52" rx="8" fill="#161d27" stroke="#3a4654" stroke-width="1.3"/>
+  <text x="693.0" y="248" font-size="14" font-weight="650" fill="#e9eef5" text-anchor="middle">git worktree</text>
+  <text x="693.0" y="264" font-size="11" fill="#93a0b0" text-anchor="middle">INSIDE the sandbox</text>
+  <rect x="800" y="115" width="185" height="92" rx="8" fill="#161d27" stroke="#3a4654" stroke-width="1.3"/>
+  <text x="892.5" y="137" font-size="14" font-weight="650" fill="#e9eef5" text-anchor="middle">Agent</text>
+  <text x="892.5" y="153" font-size="11" fill="#93a0b0" text-anchor="middle">Claude Code (default)</text>
+  <text x="892.5" y="168" font-size="11" fill="#93a0b0" text-anchor="middle">Codex — via AgentDriver</text>
+  <rect x="800" y="225" width="185" height="48" rx="8" fill="#161d27" stroke="#3a4654" stroke-width="1.3"/>
+  <text x="892.5" y="254.0" font-size="14" font-weight="650" fill="#e9eef5" text-anchor="middle">network: egress | none</text>
+  <rect x="1093" y="108" width="207" height="106" rx="8" fill="#161d27" stroke="#3a4654" stroke-width="1.3"/>
+  <text x="1196.5" y="130" font-size="14" font-weight="650" fill="#e9eef5" text-anchor="middle">Review</text>
+  <text x="1196.5" y="146" font-size="11" fill="#93a0b0" text-anchor="middle">risk flags: ci·deploy·auth</text>
+  <text x="1196.5" y="161" font-size="11" fill="#93a0b0" text-anchor="middle">·secret·dependency</text>
+  <text x="1196.5" y="176" font-size="11" fill="#93a0b0" text-anchor="middle">conflict detection</text>
+  <text x="1196.5" y="191" font-size="11" fill="#93a0b0" text-anchor="middle">test-gated merge</text>
+  <rect x="1088" y="250" width="106" height="82" rx="8" fill="#161d27" stroke="#34503f" stroke-width="1.3"/>
+  <text x="1141.0" y="272" font-size="14" font-weight="650" fill="#e9eef5" text-anchor="middle">accept</text>
+  <text x="1141.0" y="288" font-size="11" fill="#93a0b0" text-anchor="middle">→ FRESH branch</text>
+  <text x="1141.0" y="303" font-size="11" fill="#93a0b0" text-anchor="middle">on host repo</text>
+  <rect x="1204" y="250" width="106" height="82" rx="8" fill="#161d27" stroke="#4a3a3a" stroke-width="1.3"/>
+  <text x="1257.0" y="272" font-size="14" font-weight="650" fill="#e9eef5" text-anchor="middle">reject</text>
+  <text x="1257.0" y="288" font-size="11" fill="#93a0b0" text-anchor="middle">archive +</text>
+  <text x="1257.0" y="303" font-size="11" fill="#93a0b0" text-anchor="middle">roll back</text>
+  <rect x="1088" y="352" width="218" height="80" rx="8" fill="#161d27" stroke="#3a4654" stroke-width="1.3"/>
+  <text x="1197.0" y="374" font-size="14" font-weight="650" fill="#e9eef5" text-anchor="middle">Per-repo skills</text>
+  <text x="1197.0" y="390" font-size="11" fill="#93a0b0" text-anchor="middle">.sandkeep/skills</text>
+  <text x="1197.0" y="405" font-size="11" fill="#93a0b0" text-anchor="middle">registered only on accept</text>
+  <rect x="368" y="402" width="186" height="176" rx="8" fill="#11161d" stroke="#2c3742" stroke-width="1.1"/>
+  <text x="380" y="424" font-size="12" fill="#aeb9c7" text-anchor="start" font-weight="700">Legend</text>
+  <line x1="384" y1="448" x2="412" y2="448" stroke="#eb6c36" stroke-width="2.4"/>
+  <text x="420" y="452" font-size="11" fill="#9aa6b4" text-anchor="start" font-weight="400">returned: diff + JSON</text>
+  <line x1="384" y1="474" x2="412" y2="474" stroke="#46b27f" stroke-width="2.4"/>
+  <text x="420" y="478" font-size="11" fill="#9aa6b4" text-anchor="start" font-weight="400">applied on accept</text>
+  <line x1="384" y1="500" x2="412" y2="500" stroke="#7d8b9c" stroke-width="2.4"/>
+  <text x="420" y="504" font-size="11" fill="#9aa6b4" text-anchor="start" font-weight="400">control / provision</text>
+  <line x1="384" y1="526" x2="412" y2="526" stroke="#d4a843" stroke-width="2.4" stroke-dasharray="5,3"/>
+  <text x="420" y="530" font-size="11" fill="#9aa6b4" text-anchor="start" font-weight="400">read-only clone</text>
+  <line x1="384" y1="552" x2="412" y2="552" stroke="#5a6675" stroke-width="2.4" stroke-dasharray="5,3"/>
+  <text x="420" y="556" font-size="11" fill="#9aa6b4" text-anchor="start" font-weight="400">isolation / not built</text>
+  <rect x="70" y="788" width="280" height="72" rx="8" fill="#14181f" stroke="#3a4150" stroke-width="1.3" stroke-dasharray="6,4"/>
+  <text x="210.0" y="810" font-size="13" font-weight="650" fill="#8a96a6" text-anchor="middle">Egress-allowlist proxy</text>
+  <text x="210.0" y="826" font-size="11" fill="#69737f" text-anchor="middle">selective egress</text>
+  <rect x="380" y="788" width="280" height="72" rx="8" fill="#14181f" stroke="#3a4150" stroke-width="1.3" stroke-dasharray="6,4"/>
+  <text x="520.0" y="810" font-size="13" font-weight="650" fill="#8a96a6" text-anchor="middle">Secret-injecting broker</text>
+  <text x="520.0" y="826" font-size="11" fill="#69737f" text-anchor="middle">agent never holds the key</text>
+  <rect x="690" y="788" width="280" height="72" rx="8" fill="#14181f" stroke="#3a4150" stroke-width="1.3" stroke-dasharray="6,4"/>
+  <text x="830.0" y="810" font-size="13" font-weight="650" fill="#8a96a6" text-anchor="middle">Draft-PR gate</text>
+  <text x="830.0" y="826" font-size="11" fill="#69737f" text-anchor="middle">review in GitHub + CI</text>
+  <rect x="1000" y="788" width="280" height="72" rx="8" fill="#14181f" stroke="#3a4150" stroke-width="1.3" stroke-dasharray="6,4"/>
+  <text x="1140.0" y="810" font-size="13" font-weight="650" fill="#8a96a6" text-anchor="middle">Warm pool / snapshots</text>
+  <text x="1140.0" y="826" font-size="11" fill="#69737f" text-anchor="middle">fast start · fork-restore</text>
+</svg>

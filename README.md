@@ -112,10 +112,27 @@ See [`examples/quickstart.md`](examples/quickstart.md) for an end-to-end first r
 
 ## How it works
 
+<p align="center">
+  <img src="docs/assets/how-it-works.jpg" alt="How Sandkeep works — seven steps from provisioning a read-only clone, through running the agent in an isolated sandbox, extracting only the diff, to the human accept/reject gate" width="760">
+</p>
+
 1. **Provision** — your repo is mounted **read-only**; the sandbox makes its own independent clone on a task branch.
 2. **Run** — a headless Claude Code agent works only inside the sandbox, with a scoped tool set.
 3. **Extract** — only a patch + a structured results contract leave the sandbox.
 4. **Gate** — you review; on accept, Sandkeep applies the patch to a **fresh branch** on your repo. Nothing touches your working tree or `.git` until you say so.
+
+### Architecture
+
+The controller is deterministic and runs on the host; agent code only ever executes
+**inside** a sandbox. Backends (Docker / E2B microVM) sit behind one `SandboxProvider`
+seam, agents behind one `AgentDriver` seam, and only a patch + results JSON ever crosses
+back to the human gate. Dashed boxes are the deliberately-unbuilt Phase 2 pieces.
+
+<p align="center">
+  <img src="docs/assets/architecture.png" alt="Sandkeep architecture: host controller with SandboxProvider and AgentDriver seams, pluggable Docker/E2B backends, a disposable sandbox holding the read-only clone and agent, an orange patch+JSON return channel, the human gate, and a dashed roadmap band" width="100%">
+</p>
+
+<sub>Source: <a href="docs/assets/architecture.svg"><code>docs/assets/architecture.svg</code></a></sub>
 
 ## What the gate shows you
 
