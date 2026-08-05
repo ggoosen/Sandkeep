@@ -2,7 +2,6 @@
 
 > Run Claude Code agents in isolated, disposable sandboxes — one per task, with cheap rollback and a human gate before anything merges.
 
-[![CI](https://github.com/ggoosen/Sandkeep/actions/workflows/ci.yml/badge.svg)](https://github.com/ggoosen/Sandkeep/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/sandkeep.svg)](https://pypi.org/project/sandkeep/)
 [![License](https://img.shields.io/badge/license-PolyForm%20Noncommercial-blue.svg)](LICENSE)
 
@@ -171,7 +170,8 @@ proxy / secret broker slot in — is
 ## Requirements
 
 - Python 3.12+
-- Docker (for the current sandbox backend)
+- Docker (for the default sandbox backend) — or an E2B API key to use the
+  microVM backend instead (`SANDKEEP_BACKEND=e2b`)
 - An Anthropic API key (`ANTHROPIC_API_KEY`)
 
 ## Platform support
@@ -182,7 +182,7 @@ container, so the host only needs Python, git, and a Docker daemon:
 | Platform | Status |
 |---|---|
 | **macOS** (Intel & Apple Silicon) | ✅ **Tested** — full suite, incl. the boundary tests, runs green |
-| **Linux** | ✅ Expected to work (native Docker; CI target) |
+| **Linux** | ✅ Expected to work (native Docker) |
 | **Windows — WSL2** | ✅ Recommended path on Windows; effectively the Linux case |
 | **Windows — native** (PowerShell + Docker Desktop) | ⚠️ Untested. Likely works; known risk spots: drive-letter volume-mount syntax, TTY behaviour of `sandkeep shell`, and CRLF (`core.autocrlf`) rejecting sandbox-generated patches on `accept`. Issues welcome. |
 
@@ -195,7 +195,7 @@ the Docker dependency.
 
 - [x] Phase 0 — boundary proof (Docker mechanics)
 - [x] Phase 1 — single governed task loop (`run` + interactive `shell`, human gate)
-- [~] Phase 2 — real isolation + parallelism. **Done:** network-off toggle (`--no-network`), **concurrency** (`batch`), and an **E2B microVM backend with containment verified** (9/9 boundary tests). **Pending infra:** egress-allowlist proxy, secret broker, draft-PR gate, warm pool (need cloud/GitHub; deliberately not stubbed)
+- [~] Phase 2 — real isolation + parallelism. **Done:** network-off toggle (`--no-network`), **concurrency** (`batch`), and an **E2B microVM backend with containment verified** (9 of the 11 boundary tests pass — all 9 isolation checks; the 2 remaining are tool-presence in the custom template, not containment gaps). **Pending infra:** egress-allowlist proxy, secret broker, draft-PR gate, warm pool (need cloud/GitHub; deliberately not stubbed)
 - [x] Phase 3 — diff risk analysis, cross-task conflict detection, **test-gated merge**
 - [x] Phase 4 — per-repo skill authoring
 - [x] Phase 5 — pluggable agents (`--agent`, `AgentDriver` seam, per-agent images)
