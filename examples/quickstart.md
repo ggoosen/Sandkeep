@@ -3,13 +3,16 @@
 A complete first run in under five minutes, end to end, on a throwaway repo so
 nothing real is at risk.
 
-> **Reminder:** this reflects the Phase 1 single-task loop, on the Docker backend.
-> Docker is not a security boundary — keep this to code you trust for now.
+> **Reminder:** this walkthrough uses the default Docker backend, which is a
+> mechanics harness, not a security boundary — keep it to code you trust. The
+> E2B microVM backend (`SANDKEEP_BACKEND=e2b`) is the verified-containment path.
 
 ## Prerequisites
 
 - **Python 3.12+** and **Docker** running on your machine.
-- An **Anthropic API key**: `export ANTHROPIC_API_KEY=sk-ant-...`
+- An **Anthropic API key** — store it once with `sandkeep auth set`
+  (hidden prompt, `~/.sandkeep/env`, 0600), or `export ANTHROPIC_API_KEY=...`
+  (the env var always wins).
 - (Node 22 and the `claude` CLI are installed *inside* the sandbox image by
   `sandkeep image build` — you don't need them on the host.)
 
@@ -17,6 +20,7 @@ nothing real is at risk.
 
 ```bash
 pip install sandkeep            # or: uvx sandkeep
+sandkeep auth set               # store your Anthropic API key
 sandkeep image build            # one-time; builds the Node 22 + claude + git + mise image
 ```
 
@@ -49,11 +53,19 @@ patch and a results summary. It stops at the review gate and prints a `task_id`.
 
 ```bash
 sandkeep status <task_id>       # current state
-sandkeep show <task_id>         # summary, files changed, and the patch path
+sandkeep show <task_id>         # summary, files changed, patch path, risk flags
 ```
 
-Open the patch and read it. This is the human gate — nothing has touched your repo
-yet.
+Open the patch and read it. The gate also surfaces **risk flags** (changes
+touching CI/deploy/auth/secret/dependency surfaces) and warns if another task
+awaiting review touches the same files. Optionally run the repo's tests
+against the change *inside the sandbox* first:
+
+```bash
+sandkeep test <task_id> --test-cmd "pytest -q"
+```
+
+This is the human gate — nothing has touched your repo yet.
 
 ## 5. Accept or reject
 
@@ -75,8 +87,10 @@ your repo is untouched.
 
 You ran an untrusted agent against real code, saw exactly what it wanted to change,
 and decided whether it lands — with your actual repo never modified until you said
-so. That's the whole loop. Everything after this (microVM isolation, parallelism,
-conflict detection) builds on top of it.
+so. That's the whole loop. It scales from here: `sandkeep batch` runs many tasks
+in parallel (each in its own sandbox), `sandkeep shell` gives you a fully
+interactive session on the same disposable clone, and `SANDKEEP_BACKEND=e2b`
+swaps Docker for a real microVM. See the README for the full command set.
 
 ## Troubleshooting
 

@@ -1,7 +1,7 @@
-# Sandkeep — Build Specification (Phases 0–1)
+# Sandkeep — Build Specification
 
 **Audience:** Claude Code (and the human reviewing its work).
-**Scope of this spec:** Phase 0 (prove the boundary) and Phase 1 (single-task governed loop) in build detail. Phases 2–4 are roadmap stubs at the end — **do not build them yet.**
+**Scope of this spec:** Phase 0 (prove the boundary) and Phase 1 (single-task governed loop) in build detail (§0–§11); §13–§16 spec the later phases, most of which are now implemented — each section carries its own status line. Current work is tracked in `docs/improvement-plan.md`.
 **Companion:** `CLAUDE.md` (operating brief, golden rules). Read it first.
 **Source of truth for the design rationale:** the Sandkeep v2 design doc. This spec is the *buildable subset*.
 
@@ -38,16 +38,22 @@ sandkeep/
     state_store.py         # SQLite: tasks, transitions, ledger
     audit.py               # JSON-line structured logging + trace ids
     controller.py          # Tier 0: the state machine
-    policy.py              # Tier 1: scope grant (minimal in P0/P1)
+    policy.py              # diff risk analysis + cross-task conflicts (§14)
     provisioner.py         # Tier 2: sandbox lifecycle
-    agent_runner.py        # builds + runs the headless claude command
+    agent_runner.py        # agent-neutral dispatch to AgentDriver (§13)
     diff.py                # extract / validate / apply patches
     results.py             # parse + validate the results contract
     violations.py          # violation detection + classification
+    skills.py              # per-repo capability authoring (§15)
+    agent/
+      __init__.py          # driver registry (get_driver)
+      base.py              # AgentDriver ABC (§13)
+      claude.py            # the built-in claude driver
     sandbox/
       __init__.py
       base.py              # SandboxProvider ABC
-      docker_provider.py   # Phase 0 backend (the ONLY place docker is touched)
+      docker_provider.py   # default backend (the ONLY place docker is touched)
+      e2b_provider.py      # E2B microVM backend (§16, SANDKEEP_BACKEND=e2b)
   prompts/
     agent_system_prompt.md # appended to the agent's system prompt
   sandbox_image/
@@ -367,9 +373,9 @@ diff), printing the same accept/reject instructions as `run`.
 
 ---
 
-## 12. Roadmap stubs — DO NOT BUILD YET
+## 12. Later-phase status (summary)
 
-Leave `TODO(phase-N)` markers; do not implement until the phase is started.
+Most of these are now built — see each phase's own section (§13–§16) for detail. What remains unbuilt keeps `TODO(phase-N)` markers; do not stub security features that can't actually be enforced.
 
 - **Phase 2 — Real isolation + parallelism:** microVM `SandboxProvider` (E2B / Firecracker / Docker Sandboxes); snapshot/restore; concurrency + warm pool; secret-injecting broker (agent never holds the key); proper brokering egress proxy; draft-PR human gate. Status in §16. **Done:** network toggle, concurrency, and an E2B microVM with **containment verified**. **Remaining:** egress allowlist proxy, secret broker, draft-PR gate, warm pool (infra-bound) — see §16.
 - **Phase 3 — Coordination & policy:** cross-task conflict detection; test-gated merge queue; diff risk analysis (flag workflow/deploy/auth/secret/dep changes); richer `policy.py`. Full status in §14. **All implemented** (risk analysis, conflict detection, test-gated merge).
@@ -415,7 +421,7 @@ class AgentDriver(ABC):
 
 ### Decisions (resolved)
 
-1. **Image — per-agent images.** `sandkeep image build --agent <name>` renders the Dockerfile with the driver's `install_steps()`, tagged `sandkeep-img:<name>`; the provider launches the image matching the task's agent. *(Rejected: one fat image with every CLI — ships unused binaries and enlarges the in-box attack surface.)*
+1. **Image — per-agent images.** `sandkeep image build --agent <name>` renders the Dockerfile with the driver's `install_steps()`, tagged `sandkeep-sandbox:<name>` (`config.image_for`); the provider launches the image matching the task's agent. *(Rejected: one fat image with every CLI — ships unused binaries and enlarges the in-box attack surface.)*
 2. **Secret — driver-declared env var.** The controller forwards only the driver's `secret_env` into the sandbox. First cut: forward it from the host shell if set. Follow-up: `sandkeep auth set --agent <name>` stores per-agent keys (multi-key store). The Phase 0–1 `TODO(phase-2)` secret-broker note applies to every driver.
 3. **Contract — diff-only fallback.** When `produces_contract=False`, the headless `run` path uses the **same host-side diff-synthesis the interactive `shell` path already uses** (§10b). This removes the Claude-specific `results.json` dependency for other agents and simplifies the runner.
 

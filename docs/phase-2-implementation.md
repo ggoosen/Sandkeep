@@ -69,11 +69,14 @@ reaches the host. A microVM gives each task its own kernel + hardware-virtualize
 isolation — the jump from "contains accidents and prompt injection" to "contains
 a determined adversary."
 
-> **A candidate E2B provider already ships:** `src/sandkeep/sandbox/e2b_provider.py`,
-> selectable with `SANDKEEP_BACKEND=e2b`. It is **written but NOT yet verified** —
-> nobody has run the boundary suite against it. See **[Verifying the E2B backend](#verifying-the-e2b-backend)**
-> below for the exact steps to take it from candidate → verified. The sketch
-> beneath is the design rationale; the real code is in that module.
+> **An E2B provider ships and its containment is verified:**
+> `src/sandkeep/sandbox/e2b_provider.py`, selectable with `SANDKEEP_BACKEND=e2b`.
+> The adversarial boundary suite has been run against a real E2B microVM — all
+> 9 isolation checks pass; the 2 remaining reds are tool-presence in the custom
+> template (needs an E2B access token to build), not containment gaps. See
+> **[Verifying the E2B backend](#verifying-the-e2b-backend)** below to reproduce
+> the verification. The sketch beneath is the design rationale; the real code
+> is in that module.
 
 **Recommended path: E2B** (managed Firecracker microVMs — no infra to run
 yourself). Firecracker-direct or Cloud Hypervisor are the self-hosted
@@ -153,7 +156,7 @@ sandkeep auth set E2B_API_KEY        # hidden prompt, stored 0600 alongside the 
 sandkeep auth status                 # confirm it's there (masked)
 ```
 
-**Then verify — this is the step I can't do without the key:**
+**Then verify (this run has been done — reproduce it any time):**
 
 ```bash
 export E2B_API_KEY=e2b_...           # the test harness reads it from the env
@@ -253,11 +256,11 @@ asserting a draft PR is opened and the task records its URL.
 pool of pre-provisioned sandboxes for near-instant starts; snapshots for cheap
 fork/restore.
 
-**Design notes:** the controller is currently synchronous and single-task. Add a
-scheduler that runs N tasks concurrently, each with its own sandbox + its own
-state-machine instance; the SQLite store already keys everything by task id, so
-parallel tasks don't collide there — but you'll want a connection-per-thread and
-to audit pool checkout/return. Snapshots map cleanly onto microVM
+**Design notes:** concurrency is DONE — `sandkeep batch` / `run_concurrent`
+run N tasks in parallel, each in its own sandbox, over a thread-safe store
+(one shared connection + reentrant lock; see `tests/test_concurrency.py`).
+What remains here is the warm pool: pre-provisioned sandboxes for
+near-instant starts, with pool checkout/return audited. Snapshots map cleanly onto microVM
 snapshot/restore (another reason this follows #1, not precedes it).
 
 **Verify:** a test running several tasks concurrently to REVIEW with isolated
