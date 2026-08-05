@@ -92,6 +92,7 @@ class Controller:
         *,
         network_denied: bool = False,
         network: str = "egress",
+        browser: bool = False,
     ) -> None:
         self.config = config
         self.store = store
@@ -99,6 +100,7 @@ class Controller:
         self.provider = provider
         self.network = network
         self.network_denied = network_denied
+        self.browser = browser
 
     # -- the single-task loop (Phase 1) -----------------------------------
 
@@ -315,6 +317,8 @@ class Controller:
 
     #: where a proxy-mode sandbox reaches the broker (network alias + port).
     BROKER_URL = "http://broker:8080"
+    #: where a browser-bridge sandbox reaches the CDP endpoint (step 11).
+    BROWSER_CDP_URL = "http://browser:9222"
 
     def _agent_env(self, driver) -> dict[str, str]:
         """The sandbox environment for a driver.
@@ -324,7 +328,8 @@ class Controller:
         other egress through the broker's allowlist proxy — the agent never
         holds the key and can't reach anything off the allowlist. In `egress`/
         `none` mode we forward the driver's secret from the host shell (the
-        Phase 0–1 simplification the broker replaces)."""
+        Phase 0–1 simplification the broker replaces). When the browser bridge
+        is on, the agent is told where to reach the CDP endpoint."""
         if self.network == "proxy":
             env = {
                 "HTTP_PROXY": self.BROKER_URL,
@@ -334,11 +339,16 @@ class Controller:
             }
             if driver.base_url_env:
                 env[driver.base_url_env] = self.BROKER_URL + "/anthropic"
-            return env
-        env = {}
-        secret = os.environ.get(driver.secret_env, "")
-        if secret:
-            env[driver.secret_env] = secret
+        else:
+            env = {}
+            secret = os.environ.get(driver.secret_env, "")
+            if secret:
+                env[driver.secret_env] = secret
+        if self.browser:
+            # the agent connects Playwright/Puppeteer here instead of launching
+            # its own browser (connectOverCDP). It never gets a browser of its
+            # own — only a capability, proxied and logged like its API calls.
+            env["SANDKEEP_BROWSER_CDP"] = self.BROWSER_CDP_URL
         return env
 
     def _land_from_diff(

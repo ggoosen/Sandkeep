@@ -508,11 +508,16 @@ The Docker provider already supports `--network none`; Phase 2 exposes it. `netw
 
 The "brokering egress allowlist proxy" and "secret-injecting broker" rows below turned out **not** to need cloud infra — both are buildable locally with Docker `--internal` networks and the agent CLI's `ANTHROPIC_BASE_URL`. `SANDKEEP_NETWORK=proxy` runs the sandbox on a fresh `--internal` (no-egress) network behind a stdlib broker sidecar (`sandbox_image/broker/broker.py`). The broker holds the API key and straddles that internal network plus the default bridge; the sandbox reaches it at `http://broker:8080`, points its base URL at `…/broker/anthropic` (the broker injects the key), and routes other egress through the broker's CONNECT allowlist. So **the agent never holds the key and can only reach the allowlist** — real enforcement, not a config flag. Broker decision logic + reverse-proxy round-trip are host-tested (`tests/test_broker.py`); the env split + provider wiring in `tests/test_proxy_mode.py`; the Docker-backed containment proof (no key in the sandbox, disallowed egress refused) in `tests/test_proxy_boundary.py`, run in CI.
 
+### Implemented: browser bridge (`--browser`, improvement plan step 11)
+
+`--browser` (or `SANDKEEP_BROWSER=on`) attaches a headless-Chromium sidecar (`sandbox_image/browser/`) to the task network, exposing **only** a Chrome DevTools Protocol endpoint the agent drives over CDP — it launches no browser of its own. The controller injects `SANDKEEP_BROWSER_CDP=http://browser:9222`; the agent connects with Playwright/Puppeteer `connectOverCDP`. It reuses the proxy-mode network plumbing: in `proxy` mode the browser sits on the same `--internal` network and routes its own page fetches through the broker allowlist (`HTTP(S)_PROXY`), so browsing obeys the same policy — and is logged with — the agent's API calls; in `egress` mode it gets a user-defined network with normal egress. The sidecar is non-root, `--cap-drop ALL`, mounts nothing, and is torn down with the task, so nothing new crosses the return channel — a *capability*, not a hole. `--no-network` and the E2B backend refuse it (fail loud); Docker only for now. Wiring host-tested in `tests/test_browser_bridge.py`; Docker-backed CDP-reachability + teardown in `tests/test_browser_boundary.py` (CI). Screenshot/artifact return path is deliberately **not** built — it would widen what leaves the sandbox and must be gated separately.
+
 ### Deferred — needs infrastructure, NOT stubbed (and why)
 
 | Piece | Status |
 |---|---|
 | **microVM `SandboxProvider`** (E2B) | ✅ shipped + containment verified — boundary suite 9/11 on a real E2B microVM (all 9 isolation checks; 2 reds are tool-presence, not leaks) |
+| **browser bridge on E2B** | ⏳ Docker shipped (`--browser`); E2B needs a sidecar reachable from the microVM (same shape as the broker's E2B follow-up) |
 | **egress *allowlist* proxy + secret-injecting broker** | ✅ shipped for Docker (`SANDKEEP_NETWORK=proxy`) — the agent never holds the key and can only reach the allowlist. E2B parity via `SandboxNetworkOpts` is the remaining piece |
 | **draft-PR human gate** | ⏳ needs a GitHub remote + auth; nothing to test against locally |
 | **warm pool / snapshot-restore** | ⏳ fits E2B's upload model; premature without the microVM as the default backend |

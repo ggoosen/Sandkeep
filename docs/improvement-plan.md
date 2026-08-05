@@ -19,10 +19,9 @@ step 5's `stream-json` sub-item is a documented deferral (see its status note).
 | **B — Host hardening** | 2, 3, 5 | the accept path, crash recovery, honest violation handling | ✅ done |
 | **C — Boundary upgrade** | 1 | key broker + egress allowlist, built locally | ✅ done |
 | **D — Ecosystem** | 7 | a real second agent driver | ✅ done |
-| **E — Capability bridges** | 11 | browser (CDP) bridge — a capability without a hole | 📋 spec'd |
+| **E — Capability bridges** | 11 | browser (CDP) bridge — a capability without a hole | ✅ done |
 
-Milestone E is a **post-review follow-up** (from the SandVault comparison); it is
-specified below, not yet built.
+Milestone E is a **post-review follow-up** (from the SandVault comparison).
 
 Dependencies: 4 first (everything after lands gated); 5 benefits from 3's error paths;
 1 supersedes part of 5's detection story; 7 last (touches image templating + runner,
@@ -343,6 +342,15 @@ driver selected**; ledger rows attribute cost to the agent.
 > browser, which proxy mode (Step 1) otherwise makes impossible.
 
 ### Step 11 — Browser bridge (CDP over the sandbox's internal network)
+
+> **Status (shipped, Docker).** `--browser` / `SANDKEEP_BROWSER` attaches a
+> headless-Chromium CDP sidecar (`sandbox_image/browser/`) to the task network;
+> the agent drives it via `SANDKEEP_BROWSER_CDP`, and in proxy mode its page
+> loads are allowlisted through the broker. Wiring host-tested
+> (`tests/test_browser_bridge.py`, 11 tests); Docker-backed CDP reachability +
+> teardown in `tests/test_browser_boundary.py` (CI). `--no-network` and the E2B
+> backend refuse it. Build the image with `image build --with-browser`.
+> Deferred as planned: E2B parity and a gated screenshot return path.
 
 **Problem.** In `proxy` mode the sandbox has **no direct egress** — which is the point,
 but it also means an agent asked to *test a web app, screenshot a page, or scrape a

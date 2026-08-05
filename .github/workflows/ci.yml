@@ -43,5 +43,7 @@ jobs:
         run: docker build -t sandkeep-sandbox:latest sandbox_image
       - name: Build egress-broker image (proxy mode)
         run: docker build -t sandkeep-broker:latest sandbox_image/broker
+      - name: Build browser-bridge image
+        run: docker build -t sandkeep-browser:latest sandbox_image/browser
       - name: Full suite with enforced containment verification
         run: python -m pytest -q --require-docker

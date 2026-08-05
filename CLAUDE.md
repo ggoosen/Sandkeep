@@ -66,7 +66,7 @@ sandkeep gc [--dry-run]          # reap orphaned/stale sandboxes
 sandkeep skills list --repo /path/to/target-repo
 ```
 
-Useful flags on `run`/`shell`: `--agent <name>`, `--no-network`, `--model <id>`, `--max-budget-usd <n>`; `shell` also takes `--no-skip-permissions`.
+Useful flags on `run`/`shell`: `--agent <name>`, `--no-network`, `--browser` (headless-Chromium CDP sidecar the agent drives), `--model <id>`, `--max-budget-usd <n>`; `shell` also takes `--no-skip-permissions`. `SANDKEEP_NETWORK=proxy` runs behind the key broker + egress allowlist.
 
 ## How to test
 

@@ -91,6 +91,7 @@ Useful flags on `run`/`shell`:
 |---|---|
 | `--agent <name>` | pick which agent runs in the sandbox (default `claude`; also `SANDKEEP_AGENT`) |
 | `--no-network` | run with **no network at all** (agent can't reach its API; for boundary testing / offline agents; also `SANDKEEP_NETWORK=none`) |
+| `--browser` | attach a headless-Chromium sidecar the agent drives over CDP (`$SANDKEEP_BROWSER_CDP`) — a browser capability without giving the sandbox one; page loads obey the egress policy. Build it with `image build --with-browser`. Also `SANDKEEP_BROWSER` |
 | `--no-skip-permissions` | (`shell`) restore Claude Code permission prompts |
 | `--model <id>` | override the task-tier model |
 

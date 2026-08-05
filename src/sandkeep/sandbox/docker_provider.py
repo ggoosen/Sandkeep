@@ -52,17 +52,30 @@ class DockerConfig:
     broker_image: str = "sandkeep-broker:latest"
     egress_allowlist: str = "api.anthropic.com,pypi.org,files.pythonhosted.org,registry.npmjs.org"
     broker_api_key: str = ""
+    # browser bridge (improvement plan, step 11): a headless-Chromium sidecar on
+    # the task network exposing a CDP endpoint at http://browser:9222.
+    browser: bool = False
+    browser_image: str = "sandkeep-browser:latest"
 
 
 # Names derived from the sandbox container name so destroy() can find the
-# broker + network without extra bookkeeping. Kept clear of the "sandkeep-"
-# filter used by list_sandbox_ids so a broker is never mistaken for a sandbox.
+# sidecars + network without extra bookkeeping. Kept clear of the "sandkeep-"
+# filter used by list_sandbox_ids so a sidecar is never mistaken for a sandbox.
 def _broker_name(sandbox_name: str) -> str:
     return "skbroker-" + sandbox_name.removeprefix("sandkeep-")
 
 
+def _browser_name(sandbox_name: str) -> str:
+    return "skbrowser-" + sandbox_name.removeprefix("sandkeep-")
+
+
 def _network_name(sandbox_name: str) -> str:
     return "sknet-" + sandbox_name.removeprefix("sandkeep-")
+
+
+# The sandbox reaches its sidecars by network alias on the task network.
+BROKER_ALIAS_URL = "http://broker:8080"
+BROWSER_CDP_URL = "http://browser:9222"
 
 
 def _run(
@@ -86,9 +99,12 @@ class DockerProvider(SandboxProvider):
             raise SandboxError(f"repo path does not exist: {repo}")
         name = f"sandkeep-{uuid.uuid4().hex[:12]}"
 
-        if self.config.network == "proxy":
-            net = self._provision_broker(name)
-            network_arg = net
+        # A dedicated per-task network is needed when we run sidecars (the
+        # broker in proxy mode, and/or the browser bridge): the default bridge
+        # has no DNS aliases, so containers couldn't find `broker`/`browser`.
+        needs_network = self.config.network == "proxy" or self.config.browser
+        if needs_network:
+            network_arg = self._provision_sidecars(name)
         else:
             network_arg = "none" if self.config.network == "none" else "bridge"
 
@@ -117,27 +133,43 @@ class DockerProvider(SandboxProvider):
         run_env = {**os.environ, **env} if env else None
         proc = self._run(cmd, timeout=60, env=run_env)
         if proc.returncode != 0:
-            if self.config.network == "proxy":
-                self._teardown_broker(name)
+            if needs_network:
+                self._teardown_sidecars(name)
             raise SandboxError(f"docker run failed: {proc.stderr.decode(errors='replace')}")
         return SandboxHandle(id=name, workdir=WORKDIR)
 
-    def _provision_broker(self, sandbox_name: str) -> str:
-        """Stand up the egress broker for a proxy-mode sandbox and return the
-        name of the internal network the sandbox must join. The broker holds
-        the API key and straddles two networks: the default bridge (real
-        egress) and a fresh `--internal` network the sandbox sees. On the
-        internal net it answers to the alias `broker`, so the sandbox reaches
-        it at http://broker:8080 without any egress of its own."""
-        net = _network_name(sandbox_name)
-        broker = _broker_name(sandbox_name)
+    def _provision_sidecars(self, sandbox_name: str) -> str:
+        """Create the per-task network and stand up whichever sidecars the run
+        needs (broker in proxy mode, browser if enabled). Returns the network
+        the sandbox must join.
 
-        made = self._run(["docker", "network", "create", "--internal", net], timeout=60)
+        In proxy mode the network is `--internal` (no direct egress): the broker
+        straddles it and the default bridge and is the only route out. Otherwise
+        (egress + browser) it is an ordinary user-defined network so the browser
+        keeps normal egress. Either way containers reach each other by alias."""
+        proxy = self.config.network == "proxy"
+        net = _network_name(sandbox_name)
+
+        create = ["docker", "network", "create"] + (["--internal"] if proxy else []) + [net]
+        made = self._run(create, timeout=60)
         if made.returncode != 0:
             raise SandboxError(
-                f"could not create broker network: {made.stderr.decode(errors='replace')}"
+                f"could not create task network: {made.stderr.decode(errors='replace')}"
             )
-        # broker on the DEFAULT bridge first → it has real egress
+        try:
+            if proxy:
+                self._start_broker(net, sandbox_name)
+            if self.config.browser:
+                self._start_browser(net, sandbox_name, proxy=proxy)
+        except SandboxError:
+            self._teardown_sidecars(sandbox_name)
+            raise
+        return net
+
+    def _start_broker(self, net: str, sandbox_name: str) -> None:
+        """The egress broker: holds the API key, straddles the default bridge
+        (real egress) and the task's internal net, answers to alias `broker`."""
+        broker = _broker_name(sandbox_name)
         broker_env = {
             "ANTHROPIC_API_KEY": self.config.broker_api_key,
             "SANDKEEP_ALLOWLIST": self.config.egress_allowlist,
@@ -151,23 +183,43 @@ class DockerProvider(SandboxProvider):
             timeout=60, env={**os.environ, **broker_env},
         )
         if up.returncode != 0:
-            self._teardown_broker(sandbox_name)
             raise SandboxError(f"broker failed to start: {up.stderr.decode(errors='replace')}")
-        # also attach the broker to the internal net, as `broker`
         conn = self._run(
             ["docker", "network", "connect", "--alias", "broker", net, broker], timeout=60
         )
         if conn.returncode != 0:
-            self._teardown_broker(sandbox_name)
             raise SandboxError(
                 f"could not attach broker to network: {conn.stderr.decode(errors='replace')}"
             )
-        return net
 
-    def _teardown_broker(self, sandbox_name: str) -> None:
-        """Best-effort removal of a proxy sandbox's broker + network."""
+    def _start_browser(self, net: str, sandbox_name: str, *, proxy: bool) -> None:
+        """The browser bridge: headless Chromium on the task net, answering to
+        alias `browser`, exposing only its CDP endpoint. In proxy mode its own
+        egress is routed through the broker allowlist so page loads obey the
+        same policy as the agent's API calls."""
+        browser = _browser_name(sandbox_name)
+        cmd = ["docker", "run", "--detach", "--name", browser,
+               "--network", net, "--network-alias", "browser",
+               "--memory", "1g", "--pids-limit", "256",
+               "--security-opt", "no-new-privileges", "--cap-drop", "ALL"]
+        browser_env: dict[str, str] = {}
+        if proxy:
+            # the browser has no direct egress on the internal net; route it
+            # through the broker so page fetches are allowlisted + logged
+            for var in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"):
+                cmd += ["--env", var]
+                browser_env[var] = BROKER_ALIAS_URL
+        cmd.append(self.config.browser_image)
+        up = self._run(cmd, timeout=60, env={**os.environ, **browser_env} if browser_env else None)
+        if up.returncode != 0:
+            raise SandboxError(f"browser bridge failed to start: {up.stderr.decode(errors='replace')}")
+
+    def _teardown_sidecars(self, sandbox_name: str) -> None:
+        """Best-effort removal of a task's sidecars (broker, browser) + network."""
         self._run(["docker", "rm", "--force", "--volumes",
                    _broker_name(sandbox_name)], timeout=60)
+        self._run(["docker", "rm", "--force", "--volumes",
+                   _browser_name(sandbox_name)], timeout=60)
         self._run(["docker", "network", "rm", _network_name(sandbox_name)], timeout=60)
 
     def exec(self, handle: SandboxHandle, cmd: list[str], timeout: int) -> ExecResult:
@@ -209,9 +261,9 @@ class DockerProvider(SandboxProvider):
 
     def destroy(self, handle: SandboxHandle) -> None:
         proc = self._run(["docker", "rm", "--force", "--volumes", handle.id], timeout=60)
-        # Tear down the proxy sidecar too (no-op / harmless if this wasn't a
-        # proxy sandbox — the broker + network simply won't exist).
-        self._teardown_broker(handle.id)
+        # Tear down any sidecars too (no-op / harmless if this sandbox had none
+        # — the broker/browser/network simply won't exist).
+        self._teardown_sidecars(handle.id)
         if proc.returncode != 0:
             raise SandboxError(
                 f"docker rm failed for {handle.id}: {proc.stderr.decode(errors='replace')}"

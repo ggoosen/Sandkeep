@@ -43,7 +43,8 @@ SECURITY_BANNER = (
 )
 
 
-def _make_provider(cfg: Config, *, network: str, agent: str = DEFAULT_AGENT):
+def _make_provider(cfg: Config, *, network: str, agent: str = DEFAULT_AGENT,
+                   browser: bool = False):
     """Construct the configured sandbox backend (SANDKEEP_BACKEND), using the
     image that matches the selected agent (per-agent images, BUILD_SPEC §13)."""
     if cfg.backend == "e2b":
@@ -59,18 +60,40 @@ def _make_provider(cfg: Config, *, network: str, agent: str = DEFAULT_AGENT):
         image=cfg.image_for(agent), network=network,
         broker_image=cfg.broker_image, egress_allowlist=cfg.egress_allowlist,
         broker_api_key=broker_key,
+        browser=browser, browser_image=cfg.browser_image,
     ))
 
 
-def _make_controller(cfg: Config, *, network: str, agent: str = DEFAULT_AGENT) -> Controller:
+def _make_controller(cfg: Config, *, network: str, agent: str = DEFAULT_AGENT,
+                     browser: bool = False) -> Controller:
     cfg.ensure_dirs()
     audit = AuditLog(cfg.audit_log_path)
     store = StateStore(cfg.db_path, audit=audit)
-    provider = _make_provider(cfg, network=network, agent=agent)
+    provider = _make_provider(cfg, network=network, agent=agent, browser=browser)
     return Controller(
         cfg, store, audit, provider,
-        network_denied=(network == "none"), network=network,
+        network_denied=(network == "none"), network=network, browser=browser,
     )
+
+
+def _resolve_browser(cfg: Config, args: argparse.Namespace, network: str) -> bool:
+    """Whether the browser bridge is on for this run (flag > SANDKEEP_BROWSER).
+    Fails loud on the two unsupported combinations: no network to reach it, and
+    the E2B backend (sidecar not wired there yet)."""
+    on = getattr(args, "browser", False) or cfg.browser
+    if not on:
+        return False
+    if network == "none":
+        raise ControllerError(
+            "--browser needs a network to reach the CDP endpoint; it is "
+            "incompatible with --no-network"
+        )
+    if cfg.backend == "e2b":
+        raise ControllerError(
+            "the browser bridge is not supported on the e2b backend yet "
+            "(Docker only for now)"
+        )
+    return True
 
 
 def _ensure_named_secret(cfg: Config, name: str) -> bool:
@@ -119,6 +142,17 @@ def _warn_if_no_network(network: str) -> None:
             "🔒 proxy mode: the sandbox runs with no direct egress behind the "
             "key-broker — the agent never holds the API key and can only reach "
             "the allowlist. (build the broker image with `image build --with-broker`)",
+            file=sys.stderr,
+        )
+
+
+def _warn_if_browser(browser: bool) -> None:
+    if browser:
+        print(
+            "🌐 browser bridge: the agent drives a headless Chromium sidecar over "
+            "CDP at $SANDKEEP_BROWSER_CDP (it launches no browser of its own; in "
+            "proxy mode its page loads go through the allowlist). "
+            "(build it with `image build --with-browser`)",
             file=sys.stderr,
         )
 
@@ -212,6 +246,9 @@ def _cmd_image_build(cfg: Config, args: argparse.Namespace) -> int:
     if args.with_broker or cfg.network == "proxy":
         build_image(resource_path("sandbox_image") / "broker", cfg.broker_image)
         print(f"built {cfg.broker_image} (egress broker for proxy mode)")
+    if args.with_browser or cfg.browser:
+        build_image(resource_path("sandbox_image") / "browser", cfg.browser_image)
+        print(f"built {cfg.browser_image} (browser bridge)")
     return 0
 
 
@@ -226,7 +263,9 @@ def _cmd_run(cfg: Config, args: argparse.Namespace) -> int:
     # purpose; TODO(phase-2): brokering egress *allowlist* proxy + secret broker.
     network = _resolve_network(cfg, args)
     _warn_if_no_network(network)
-    controller = _make_controller(cfg, network=network, agent=driver.name)
+    browser = _resolve_browser(cfg, args, network)
+    _warn_if_browser(browser)
+    controller = _make_controller(cfg, network=network, agent=driver.name, browser=browser)
     task = controller.run_task(
         args.repo,
         args.task,
@@ -277,10 +316,12 @@ def _cmd_batch(cfg: Config, args: argparse.Namespace) -> int:
     print(SECURITY_BANNER, file=sys.stderr)
     network = _resolve_network(cfg, args)
     _warn_if_no_network(network)
+    browser = _resolve_browser(cfg, args, network)
+    _warn_if_browser(browser)
     print(f"running {len(tasks)} task(s), up to {args.max_parallel} in parallel "
           "— each in its own sandbox\n", file=sys.stderr)
 
-    controller = _make_controller(cfg, network=network, agent=driver.name)
+    controller = _make_controller(cfg, network=network, agent=driver.name, browser=browser)
     specs = [
         dict(repo_path=args.repo, instruction=t, model=args.model, agent=driver.name,
              max_budget_usd=args.max_budget_usd)
@@ -317,7 +358,9 @@ def _cmd_shell(cfg: Config, args: argparse.Namespace) -> int:
     # purpose; TODO(phase-2): brokering egress allowlist proxy)
     network = _resolve_network(cfg, args)
     _warn_if_no_network(network)
-    controller = _make_controller(cfg, network=network, agent=driver.name)
+    browser = _resolve_browser(cfg, args, network)
+    _warn_if_browser(browser)
+    controller = _make_controller(cfg, network=network, agent=driver.name, browser=browser)
     task = controller.run_interactive(
         args.repo, model=args.model, agent=driver.name, seed=args.task,
         skip_permissions=args.skip_permissions,
@@ -478,6 +521,15 @@ class _RemovedFlag(argparse.Action):
         )
 
 
+def _add_browser_flag(p: argparse.ArgumentParser) -> None:
+    p.add_argument(
+        "--browser", action="store_true",
+        help="attach a headless-Chromium sidecar the agent drives over CDP "
+             "($SANDKEEP_BROWSER_CDP); page loads obey the egress policy. "
+             "Needs a network; Docker backend only. Also SANDKEEP_BROWSER.",
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="sandkeep")
     parser.add_argument(
@@ -497,6 +549,10 @@ def build_parser() -> argparse.ArgumentParser:
     image_build.add_argument(
         "--with-broker", action="store_true",
         help="also build the egress-broker image (required for proxy network mode)",
+    )
+    image_build.add_argument(
+        "--with-browser", action="store_true",
+        help="also build the browser-bridge image (required for --browser)",
     )
 
     auth = sub.add_parser("auth", help="manage stored API keys (Anthropic, E2B, …)")
@@ -531,6 +587,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="run with no network at all (agent can't reach its API; for "
              "boundary testing / offline agents). Default: egress (SANDKEEP_NETWORK).",
     )
+    _add_browser_flag(run)
 
     batch = sub.add_parser(
         "batch", help="run many tasks concurrently, one sandbox each")
@@ -549,6 +606,7 @@ def build_parser() -> argparse.ArgumentParser:
                        help="max tasks running at once (default: 4)")
     batch.add_argument("--no-network", action="store_true",
                        help="run sandboxes with no network at all")
+    _add_browser_flag(batch)
 
     shell = sub.add_parser(
         "shell", help="open an interactive Claude Code session inside a sandbox"
@@ -575,6 +633,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="run with no network at all (agent can't reach its API; for "
              "boundary testing / offline agents). Default: egress (SANDKEEP_NETWORK).",
     )
+    _add_browser_flag(shell)
 
     sk = sub.add_parser("skills", help="manage per-repo authored skills")
     sk_sub = sk.add_subparsers(dest="skills_command", required=True)

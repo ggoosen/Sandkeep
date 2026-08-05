@@ -23,6 +23,7 @@ DEFAULT_BROKER_IMAGE = "sandkeep-broker:latest"
 DEFAULT_EGRESS_ALLOWLIST = (
     "api.anthropic.com,pypi.org,files.pythonhosted.org,registry.npmjs.org"
 )
+DEFAULT_BROWSER_IMAGE = "sandkeep-browser:latest"
 DEFAULT_BACKEND = "docker"  # "docker" (Phase 0–1 harness) | "e2b" (microVM, Phase 2)
 BACKENDS = ("docker", "e2b")
 DEFAULT_E2B_TEMPLATE = "sandkeep"
@@ -46,6 +47,10 @@ class Config:
     network: str = DEFAULT_NETWORK
     broker_image: str = DEFAULT_BROKER_IMAGE
     egress_allowlist: str = DEFAULT_EGRESS_ALLOWLIST
+    # browser bridge (improvement plan, step 11): a CDP sidecar the agent drives
+    # instead of launching its own browser. Off by default; --browser turns it on.
+    browser: bool = False
+    browser_image: str = DEFAULT_BROWSER_IMAGE
     backend: str = DEFAULT_BACKEND
     e2b_template: str = DEFAULT_E2B_TEMPLATE
     # Optional test-gated merge: a command run INSIDE the sandbox against the
@@ -71,6 +76,9 @@ class Config:
             )
         cfg.broker_image = os.environ.get("SANDKEEP_BROKER_IMAGE", cfg.broker_image)
         cfg.egress_allowlist = os.environ.get("SANDKEEP_ALLOWLIST", cfg.egress_allowlist)
+        if "SANDKEEP_BROWSER" in os.environ:
+            cfg.browser = os.environ["SANDKEEP_BROWSER"].lower() in ("1", "on", "true", "yes")
+        cfg.browser_image = os.environ.get("SANDKEEP_BROWSER_IMAGE", cfg.browser_image)
         cfg.backend = os.environ.get("SANDKEEP_BACKEND", cfg.backend)
         if cfg.backend not in BACKENDS:
             raise ValueError(
