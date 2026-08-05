@@ -250,6 +250,15 @@ with real token counts; `run` prints progress events; boundary suite unchanged.
 
 ### Step 1 — Local key broker + egress allowlist (the two "pending infra" items, no cloud needed)
 
+> **Status (shipped, Docker).** `SANDKEEP_NETWORK=proxy` runs the sandbox on a
+> `--internal` no-egress network behind the broker sidecar
+> (`sandbox_image/broker/`): the agent holds no key and can only reach the
+> allowlist. Broker logic + reverse-proxy round-trip are host-verified
+> (`tests/test_broker.py`, 12 tests); the env split + provider command sequence
+> in `tests/test_proxy_mode.py`; the Docker-backed containment proof
+> (`tests/test_proxy_boundary.py`) runs in CI. E2B parity is the remaining
+> piece. Build the broker image with `sandkeep image build --with-broker`.
+
 **Problem.** Default network is open egress and the sandbox holds
 `ANTHROPIC_API_KEY` — exfiltration is one `curl` away, and nothing detects *successful*
 egress. BUILD_SPEC §16 defers both fixes as "needs infrastructure this repo can't

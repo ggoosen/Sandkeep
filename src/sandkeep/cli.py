@@ -52,7 +52,14 @@ def _make_provider(cfg: Config, *, network: str, agent: str = DEFAULT_AGENT):
         from .sandbox.e2b_provider import E2BConfig, E2BProvider
 
         return E2BProvider(E2BConfig(template=cfg.e2b_template, network=network))
-    return DockerProvider(DockerConfig(image=cfg.image_for(agent), network=network))
+    # In proxy mode the DockerProvider stands up the key-broker sidecar; the
+    # key is handed to the BROKER config here, never to the sandbox env.
+    broker_key = load_secret(cfg, "ANTHROPIC_API_KEY") or "" if network == "proxy" else ""
+    return DockerProvider(DockerConfig(
+        image=cfg.image_for(agent), network=network,
+        broker_image=cfg.broker_image, egress_allowlist=cfg.egress_allowlist,
+        broker_api_key=broker_key,
+    ))
 
 
 def _make_controller(cfg: Config, *, network: str, agent: str = DEFAULT_AGENT) -> Controller:
@@ -60,7 +67,10 @@ def _make_controller(cfg: Config, *, network: str, agent: str = DEFAULT_AGENT) -
     audit = AuditLog(cfg.audit_log_path)
     store = StateStore(cfg.db_path, audit=audit)
     provider = _make_provider(cfg, network=network, agent=agent)
-    return Controller(cfg, store, audit, provider, network_denied=(network == "none"))
+    return Controller(
+        cfg, store, audit, provider,
+        network_denied=(network == "none"), network=network,
+    )
 
 
 def _ensure_named_secret(cfg: Config, name: str) -> bool:
@@ -102,6 +112,13 @@ def _warn_if_no_network(network: str) -> None:
             "⚠ --no-network: the sandbox has NO network. The agent cannot reach "
             "its API, so a normal run will fail — this is for boundary testing or "
             "an offline agent.",
+            file=sys.stderr,
+        )
+    elif network == "proxy":
+        print(
+            "🔒 proxy mode: the sandbox runs with no direct egress behind the "
+            "key-broker — the agent never holds the API key and can only reach "
+            "the allowlist. (build the broker image with `image build --with-broker`)",
             file=sys.stderr,
         )
 
@@ -192,6 +209,9 @@ def _cmd_image_build(cfg: Config, args: argparse.Namespace) -> int:
             resource_path("sandbox_image"), tag, driver.name, driver.install_steps()
         )
     print(f"built {tag} (agent: {driver.name})")
+    if args.with_broker or cfg.network == "proxy":
+        build_image(resource_path("sandbox_image") / "broker", cfg.broker_image)
+        print(f"built {cfg.broker_image} (egress broker for proxy mode)")
     return 0
 
 
@@ -473,6 +493,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--agent", default=None,
         help=f"agent to build the image for (default: {DEFAULT_AGENT}; "
              f"available: {', '.join(available_agents())})",
+    )
+    image_build.add_argument(
+        "--with-broker", action="store_true",
+        help="also build the egress-broker image (required for proxy network mode)",
     )
 
     auth = sub.add_parser("auth", help="manage stored API keys (Anthropic, E2B, …)")

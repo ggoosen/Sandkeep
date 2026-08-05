@@ -12,8 +12,17 @@ from pathlib import Path
 
 DEFAULT_MODEL = "claude-sonnet-4-6"
 DEFAULT_AGENT = "claude"
-DEFAULT_NETWORK = "egress"  # "egress" (bridge) | "none" (no network at all)
-NETWORK_MODES = ("egress", "none")
+# "egress"  — open bridge (agent reaches anything, and holds the key)
+# "none"    — no network at all (boundary-test posture)
+# "proxy"   — the sandbox runs on an internal (no-egress) network behind the
+#             key-broker sidecar: it never holds the API key and can only reach
+#             the allowlist (improvement plan, step 1)
+DEFAULT_NETWORK = "egress"
+NETWORK_MODES = ("egress", "none", "proxy")
+DEFAULT_BROKER_IMAGE = "sandkeep-broker:latest"
+DEFAULT_EGRESS_ALLOWLIST = (
+    "api.anthropic.com,pypi.org,files.pythonhosted.org,registry.npmjs.org"
+)
 DEFAULT_BACKEND = "docker"  # "docker" (Phase 0–1 harness) | "e2b" (microVM, Phase 2)
 BACKENDS = ("docker", "e2b")
 DEFAULT_E2B_TEMPLATE = "sandkeep"
@@ -35,6 +44,8 @@ class Config:
     model: str = DEFAULT_MODEL
     agent: str = DEFAULT_AGENT
     network: str = DEFAULT_NETWORK
+    broker_image: str = DEFAULT_BROKER_IMAGE
+    egress_allowlist: str = DEFAULT_EGRESS_ALLOWLIST
     backend: str = DEFAULT_BACKEND
     e2b_template: str = DEFAULT_E2B_TEMPLATE
     # Optional test-gated merge: a command run INSIDE the sandbox against the
@@ -58,6 +69,8 @@ class Config:
             raise ValueError(
                 f"SANDKEEP_NETWORK must be one of {NETWORK_MODES}, got {cfg.network!r}"
             )
+        cfg.broker_image = os.environ.get("SANDKEEP_BROKER_IMAGE", cfg.broker_image)
+        cfg.egress_allowlist = os.environ.get("SANDKEEP_ALLOWLIST", cfg.egress_allowlist)
         cfg.backend = os.environ.get("SANDKEEP_BACKEND", cfg.backend)
         if cfg.backend not in BACKENDS:
             raise ValueError(

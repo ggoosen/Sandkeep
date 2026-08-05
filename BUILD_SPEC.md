@@ -504,17 +504,20 @@ The Docker provider already supports `--network none`; Phase 2 exposes it. `netw
 
 `SANDKEEP_BACKEND=e2b` runs each task in an E2B Firecracker microVM (`e2b_provider.py`). The adversarial boundary suite passes **9/9 isolation checks** against a real microVM (`SANDKEEP_TEST_BACKEND=e2b pytest tests/test_boundary.py`); `allow_internet_access=False` gives a true no-network posture, and `/src` is built as root / read-only with a non-root agent. The 2 remaining suite reds are tool-presence (the custom template needs an E2B access token to build), not containment gaps. See docs/phase-2-implementation.md → "Verifying the E2B backend".
 
+### Implemented: local key broker + egress allowlist (`SANDKEEP_NETWORK=proxy`)
+
+The "brokering egress allowlist proxy" and "secret-injecting broker" rows below turned out **not** to need cloud infra — both are buildable locally with Docker `--internal` networks and the agent CLI's `ANTHROPIC_BASE_URL`. `SANDKEEP_NETWORK=proxy` runs the sandbox on a fresh `--internal` (no-egress) network behind a stdlib broker sidecar (`sandbox_image/broker/broker.py`). The broker holds the API key and straddles that internal network plus the default bridge; the sandbox reaches it at `http://broker:8080`, points its base URL at `…/broker/anthropic` (the broker injects the key), and routes other egress through the broker's CONNECT allowlist. So **the agent never holds the key and can only reach the allowlist** — real enforcement, not a config flag. Broker decision logic + reverse-proxy round-trip are host-tested (`tests/test_broker.py`); the env split + provider wiring in `tests/test_proxy_mode.py`; the Docker-backed containment proof (no key in the sandbox, disallowed egress refused) in `tests/test_proxy_boundary.py`, run in CI.
+
 ### Deferred — needs infrastructure, NOT stubbed (and why)
 
-| Piece | Why it can't be built/tested here | Why no stub |
-|---|---|---|
-| **microVM `SandboxProvider`** (E2B) | ✅ **shipped + containment verified** — boundary suite 9/9 on a real E2B microVM. 2 remaining reds are tool-presence (claude/curl in a custom template, needs an E2B *access token* to build), not leaks | n/a — real, verified code |
-| **brokering egress *allowlist* proxy** | needs a real proxy enforcing per-host rules (E2B's `SandboxNetworkOpts` may make this cheaper than a separate proxy — worth investigating) | an unenforced allowlist config reads as "exfil is blocked" when it isn't |
-| **secret-injecting broker** (agent never holds the key) | needs the proxy to inject creds out-of-band | a config flag can't stop the agent seeing an env var; pretending it does is false security |
-| **draft-PR human gate** | needs a GitHub remote + auth | nothing to test against locally |
-| **warm pool / snapshot-restore** | Docker mounts the repo at create() so a pre-provisioned pool can't hold it; fits E2B's upload model | premature without the microVM as the default backend |
+| Piece | Status |
+|---|---|
+| **microVM `SandboxProvider`** (E2B) | ✅ shipped + containment verified — boundary suite 9/11 on a real E2B microVM (all 9 isolation checks; 2 reds are tool-presence, not leaks) |
+| **egress *allowlist* proxy + secret-injecting broker** | ✅ shipped for Docker (`SANDKEEP_NETWORK=proxy`) — the agent never holds the key and can only reach the allowlist. E2B parity via `SandboxNetworkOpts` is the remaining piece |
+| **draft-PR human gate** | ⏳ needs a GitHub remote + auth; nothing to test against locally |
+| **warm pool / snapshot-restore** | ⏳ fits E2B's upload model; premature without the microVM as the default backend |
 
-Each remains marked `TODO(phase-2)` in code. The `SandboxProvider` ABC (§4) is the seam: a microVM backend drops in there and **must pass the unmodified boundary suite** (§9–§10) — that contract is what makes the deferral safe.
+The two remaining rows keep `TODO(phase-2)` markers in code. The `SandboxProvider` ABC (§4) is the seam: a microVM backend drops in there and **must pass the unmodified boundary suite** (§9–§10) — that contract is what makes the deferral safe.
 
 ### Acceptance (`test_network.py`)
 

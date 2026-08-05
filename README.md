@@ -196,7 +196,7 @@ the Docker dependency.
 
 - [x] Phase 0 — boundary proof (Docker mechanics)
 - [x] Phase 1 — single governed task loop (`run` + interactive `shell`, human gate)
-- [~] Phase 2 — real isolation + parallelism. **Done:** network-off toggle (`--no-network`), **concurrency** (`batch`), and an **E2B microVM backend with containment verified** (9 of the 11 boundary tests pass — all 9 isolation checks; the 2 remaining are tool-presence in the custom template, not containment gaps). **Pending infra:** egress-allowlist proxy, secret broker, draft-PR gate, warm pool (need cloud/GitHub; deliberately not stubbed)
+- [~] Phase 2 — real isolation + parallelism. **Done:** network-off toggle (`--no-network`), **concurrency** (`batch`), an **E2B microVM backend with containment verified** (9 of the 11 boundary tests pass — all 9 isolation checks; the 2 remaining are tool-presence in the custom template, not containment gaps), and a **local key-broker + egress-allowlist** (`SANDKEEP_NETWORK=proxy`) so the agent never holds the API key and can only reach an allowlist — no cloud needed. **Pending:** E2B proxy parity, draft-PR gate, warm pool
 - [x] Phase 3 — diff risk analysis, cross-task conflict detection, **test-gated merge**
 - [x] Phase 4 — per-repo skill authoring
 - [x] Phase 5 — pluggable agents (`--agent`, `AgentDriver` seam, per-agent images)

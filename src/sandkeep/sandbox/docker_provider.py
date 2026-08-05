@@ -36,15 +36,33 @@ from .base import (
 @dataclass
 class DockerConfig:
     image: str = "sandkeep-sandbox:latest"
-    # "none" = no network at all (Phase 0 / boundary suite).
-    # "egress" = Docker's default bridge so the agent can reach
-    # api.anthropic.com. This is NOT a real allowlist; full egress control
-    # is gated here on purpose. TODO(phase-2): secret-injecting brokering proxy.
+    # "none"   = no network at all (Phase 0 / boundary suite).
+    # "egress" = Docker's default bridge; the agent reaches anything and holds
+    #            the key. NOT an allowlist.
+    # "proxy"  = the sandbox runs on an --internal (no-egress) network behind
+    #            the key-broker sidecar: it never holds the API key and can only
+    #            reach the allowlist (improvement plan, step 1).
     network: str = "none"
     memory: str = "2g"
     cpus: str = "2"
     pids_limit: int = 256
     extra_run_args: list[str] = field(default_factory=list)
+    # proxy-mode only: the broker image, the host allowlist, and the API key
+    # the BROKER (never the sandbox) holds.
+    broker_image: str = "sandkeep-broker:latest"
+    egress_allowlist: str = "api.anthropic.com,pypi.org,files.pythonhosted.org,registry.npmjs.org"
+    broker_api_key: str = ""
+
+
+# Names derived from the sandbox container name so destroy() can find the
+# broker + network without extra bookkeeping. Kept clear of the "sandkeep-"
+# filter used by list_sandbox_ids so a broker is never mistaken for a sandbox.
+def _broker_name(sandbox_name: str) -> str:
+    return "skbroker-" + sandbox_name.removeprefix("sandkeep-")
+
+
+def _network_name(sandbox_name: str) -> str:
+    return "sknet-" + sandbox_name.removeprefix("sandkeep-")
 
 
 def _run(
@@ -67,10 +85,17 @@ class DockerProvider(SandboxProvider):
         if not repo.is_dir():
             raise SandboxError(f"repo path does not exist: {repo}")
         name = f"sandkeep-{uuid.uuid4().hex[:12]}"
+
+        if self.config.network == "proxy":
+            net = self._provision_broker(name)
+            network_arg = net
+        else:
+            network_arg = "none" if self.config.network == "none" else "bridge"
+
         cmd = [
             "docker", "run", "--detach",
             "--name", name,
-            "--network", "none" if self.config.network == "none" else "bridge",
+            "--network", network_arg,
             "--memory", self.config.memory,
             "--cpus", self.config.cpus,
             "--pids-limit", str(self.config.pids_limit),
@@ -83,17 +108,67 @@ class DockerProvider(SandboxProvider):
         ]
         # Secrets stay OFF the argv: `--env KEY` (no value) makes the docker
         # client read the value from its own process environment, so it never
-        # appears in host `ps`/`/proc/*/cmdline`. (It is still visible in
-        # `docker inspect` — Docker stores container env by design; removing
-        # the key from the sandbox entirely is TODO(phase-2): secret broker.)
+        # appears in host `ps`/`/proc/*/cmdline`. In proxy mode `env` carries NO
+        # secret at all — only ANTHROPIC_BASE_URL/HTTPS_PROXY pointing at the
+        # broker, which holds the key.
         for key in env:
             cmd += ["--env", key]
         cmd += [self.config.image, "sleep", "infinity"]
         run_env = {**os.environ, **env} if env else None
         proc = self._run(cmd, timeout=60, env=run_env)
         if proc.returncode != 0:
+            if self.config.network == "proxy":
+                self._teardown_broker(name)
             raise SandboxError(f"docker run failed: {proc.stderr.decode(errors='replace')}")
         return SandboxHandle(id=name, workdir=WORKDIR)
+
+    def _provision_broker(self, sandbox_name: str) -> str:
+        """Stand up the egress broker for a proxy-mode sandbox and return the
+        name of the internal network the sandbox must join. The broker holds
+        the API key and straddles two networks: the default bridge (real
+        egress) and a fresh `--internal` network the sandbox sees. On the
+        internal net it answers to the alias `broker`, so the sandbox reaches
+        it at http://broker:8080 without any egress of its own."""
+        net = _network_name(sandbox_name)
+        broker = _broker_name(sandbox_name)
+
+        made = self._run(["docker", "network", "create", "--internal", net], timeout=60)
+        if made.returncode != 0:
+            raise SandboxError(
+                f"could not create broker network: {made.stderr.decode(errors='replace')}"
+            )
+        # broker on the DEFAULT bridge first → it has real egress
+        broker_env = {
+            "ANTHROPIC_API_KEY": self.config.broker_api_key,
+            "SANDKEEP_ALLOWLIST": self.config.egress_allowlist,
+        }
+        up = self._run(
+            ["docker", "run", "--detach", "--name", broker,
+             "--memory", "512m", "--pids-limit", "128",
+             "--security-opt", "no-new-privileges", "--cap-drop", "ALL",
+             "--env", "ANTHROPIC_API_KEY", "--env", "SANDKEEP_ALLOWLIST",
+             self.config.broker_image],
+            timeout=60, env={**os.environ, **broker_env},
+        )
+        if up.returncode != 0:
+            self._teardown_broker(sandbox_name)
+            raise SandboxError(f"broker failed to start: {up.stderr.decode(errors='replace')}")
+        # also attach the broker to the internal net, as `broker`
+        conn = self._run(
+            ["docker", "network", "connect", "--alias", "broker", net, broker], timeout=60
+        )
+        if conn.returncode != 0:
+            self._teardown_broker(sandbox_name)
+            raise SandboxError(
+                f"could not attach broker to network: {conn.stderr.decode(errors='replace')}"
+            )
+        return net
+
+    def _teardown_broker(self, sandbox_name: str) -> None:
+        """Best-effort removal of a proxy sandbox's broker + network."""
+        self._run(["docker", "rm", "--force", "--volumes",
+                   _broker_name(sandbox_name)], timeout=60)
+        self._run(["docker", "network", "rm", _network_name(sandbox_name)], timeout=60)
 
     def exec(self, handle: SandboxHandle, cmd: list[str], timeout: int) -> ExecResult:
         full = ["docker", "exec", handle.id, *cmd]
@@ -134,6 +209,9 @@ class DockerProvider(SandboxProvider):
 
     def destroy(self, handle: SandboxHandle) -> None:
         proc = self._run(["docker", "rm", "--force", "--volumes", handle.id], timeout=60)
+        # Tear down the proxy sidecar too (no-op / harmless if this wasn't a
+        # proxy sandbox — the broker + network simply won't exist).
+        self._teardown_broker(handle.id)
         if proc.returncode != 0:
             raise SandboxError(
                 f"docker rm failed for {handle.id}: {proc.stderr.decode(errors='replace')}"

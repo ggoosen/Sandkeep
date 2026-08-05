@@ -132,6 +132,29 @@ def provider(request):
     return DockerProvider(DockerConfig(image=image, network="none"))
 
 
+@pytest.fixture(scope="session")
+def broker_image(request: pytest.FixtureRequest) -> str:
+    """Build the egress-broker image for proxy-mode tests (improvement plan,
+    step 1). Same skip/fail contract as sandbox_image."""
+    required = request.config.getoption("--require-docker")
+    tag = "sandkeep-broker:latest"
+    if not _docker_ready():
+        msg = "docker daemon not available"
+        if required:
+            pytest.fail(msg, pytrace=False)
+        pytest.skip(msg)
+    ctx = Path(__file__).parents[1] / "sandbox_image" / "broker"
+    build = subprocess.run(
+        ["docker", "build", "-t", tag, str(ctx)], capture_output=True
+    )
+    if build.returncode != 0:
+        detail = f"could not build {tag}: {build.stderr.decode()[-500:]}"
+        if required:
+            pytest.fail(detail, pytrace=False)
+        pytest.skip(detail)
+    return tag
+
+
 def _git(repo: Path, *args: str) -> str:
     proc = subprocess.run(
         ["git", "-C", str(repo), *args], capture_output=True, text=True, check=True

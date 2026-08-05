@@ -91,11 +91,13 @@ class Controller:
         provider: SandboxProvider,
         *,
         network_denied: bool = False,
+        network: str = "egress",
     ) -> None:
         self.config = config
         self.store = store
         self.audit = audit
         self.provider = provider
+        self.network = network
         self.network_denied = network_denied
 
     # -- the single-task loop (Phase 1) -----------------------------------
@@ -311,11 +313,29 @@ class Controller:
 
     # -- shared helpers ----------------------------------------------------
 
+    #: where a proxy-mode sandbox reaches the broker (network alias + port).
+    BROKER_URL = "http://broker:8080"
+
     def _agent_env(self, driver) -> dict[str, str]:
-        """The sandbox environment for a driver: forward its declared secret
-        from the host shell if present (BUILD_SPEC §13 first cut).
-        TODO(phase-2): secret-injecting proxy — the agent never holds the key."""
-        env: dict[str, str] = {}
+        """The sandbox environment for a driver.
+
+        In `proxy` mode the sandbox gets NO credential: it points at the broker
+        (which injects the key) via the driver's base-URL var and routes all
+        other egress through the broker's allowlist proxy — the agent never
+        holds the key and can't reach anything off the allowlist. In `egress`/
+        `none` mode we forward the driver's secret from the host shell (the
+        Phase 0–1 simplification the broker replaces)."""
+        if self.network == "proxy":
+            env = {
+                "HTTP_PROXY": self.BROKER_URL,
+                "HTTPS_PROXY": self.BROKER_URL,
+                "http_proxy": self.BROKER_URL,
+                "https_proxy": self.BROKER_URL,
+            }
+            if driver.base_url_env:
+                env[driver.base_url_env] = self.BROKER_URL + "/anthropic"
+            return env
+        env = {}
         secret = os.environ.get(driver.secret_env, "")
         if secret:
             env[driver.secret_env] = secret
