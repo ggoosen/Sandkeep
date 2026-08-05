@@ -61,6 +61,7 @@ def _make_provider(cfg: Config, *, network: str, agent: str = DEFAULT_AGENT,
         broker_image=cfg.broker_image, egress_allowlist=cfg.egress_allowlist,
         broker_api_key=broker_key,
         browser=browser, browser_image=cfg.browser_image,
+        seccomp_profile=cfg.seccomp_profile, read_only_rootfs=cfg.read_only_rootfs,
     ))
 
 

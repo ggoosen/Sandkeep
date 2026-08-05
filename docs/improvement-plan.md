@@ -451,6 +451,18 @@ boundary the default.
 
 ### Step 12 — Harden the default Docker backend
 
+> **Status (shipped, host-verified).** `extra_run_args` validation refuses
+> boundary-breaching flags before any docker call (`validate_extra_run_args`,
+> fully tested); `SANDKEEP_SECCOMP` wires a custom seccomp profile and
+> `SANDKEEP_READONLY_ROOTFS` an opt-in read-only rootfs + tmpfs. Both hardening
+> knobs default off (Docker's built-in seccomp stays in force) so existing runs
+> are unchanged; flag presence is host-tested (`tests/test_docker_hardening.py`),
+> runtime correctness is the operator's to verify against their image (can't be
+> exercised without a daemon). Shipping a hand-written seccomp profile + a forced
+> read-only rootfs was **not** done — an unverifiable profile that breaks the
+> agent is worse than Docker's tested default; SECURITY.md documents how to
+> supply one, and userns-remap as the daemon-level setting it is.
+
 **Problem.** The Docker sandbox has `--cap-drop ALL` + `no-new-privileges` and nothing
 else: no seccomp/apparmor profile, writable rootfs, no user-namespace remap, and
 `extra_run_args` is spliced in unvalidated (an operator config could re-add a writable

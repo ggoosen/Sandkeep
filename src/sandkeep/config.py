@@ -51,6 +51,10 @@ class Config:
     # instead of launching its own browser. Off by default; --browser turns it on.
     browser: bool = False
     browser_image: str = DEFAULT_BROWSER_IMAGE
+    # Docker hardening (improvement plan, step 12): a custom seccomp profile path
+    # ("" leaves Docker's built-in default), and an opt-in read-only rootfs.
+    seccomp_profile: str = ""
+    read_only_rootfs: bool = False
     backend: str = DEFAULT_BACKEND
     e2b_template: str = DEFAULT_E2B_TEMPLATE
     # Optional test-gated merge: a command run INSIDE the sandbox against the
@@ -79,6 +83,10 @@ class Config:
         if "SANDKEEP_BROWSER" in os.environ:
             cfg.browser = os.environ["SANDKEEP_BROWSER"].lower() in ("1", "on", "true", "yes")
         cfg.browser_image = os.environ.get("SANDKEEP_BROWSER_IMAGE", cfg.browser_image)
+        cfg.seccomp_profile = os.environ.get("SANDKEEP_SECCOMP", cfg.seccomp_profile)
+        if "SANDKEEP_READONLY_ROOTFS" in os.environ:
+            cfg.read_only_rootfs = os.environ["SANDKEEP_READONLY_ROOTFS"].lower() in (
+                "1", "on", "true", "yes")
         cfg.backend = os.environ.get("SANDKEEP_BACKEND", cfg.backend)
         if cfg.backend not in BACKENDS:
             raise ValueError(
