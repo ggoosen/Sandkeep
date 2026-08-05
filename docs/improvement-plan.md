@@ -630,6 +630,18 @@ quota fails loud pre-provision; both are audited.
 
 ### Step 19 — E2B feature parity (broker + browser)
 
+> **Status (guardrail shipped; full parity blocked on the SDK).** Full broker +
+> browser parity is **not buildable on the basic E2B SDK**: it exposes no inbound
+> tunnel or per-host allowlist, and running the broker *inside* the microVM would
+> put the key back within the agent's reach — defeating the point. So the secure
+> version needs E2B network features (or a publicly-hosted broker) that can't be
+> built or verified here. What **is** shipped is the thing that must hold in the
+> meantime: E2B now **refuses** `network=proxy` and `--browser` loudly (CLI
+> pre-provision *and* provider-level defense-in-depth), instead of silently
+> downgrading to an egress run with the key forwarded into the VM
+> (`tests/test_e2b_parity.py`). This unblocks Step 13 to keep the default at
+> `hardened-docker` honestly. Full parity stays open, dependency stated.
+
 **Problem.** The one *verified* backend (E2B) has neither the key broker (Step 1) nor the
 browser bridge (Step 11) — so choosing real containment means losing the best features.
 This blocks Step 13 (microVM-by-default).

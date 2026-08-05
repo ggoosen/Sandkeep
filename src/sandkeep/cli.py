@@ -124,10 +124,20 @@ def _mask(key: str) -> str:
 def _resolve_network(cfg: Config, args: argparse.Namespace) -> str:
     """Network mode for a run: `--no-network` forces off, else config/env
     (SANDKEEP_NETWORK, default egress). The agent needs egress for its API, so
-    `none` is for boundary testing / offline agents (BUILD_SPEC §16)."""
-    if getattr(args, "no_network", False):
-        return "none"
-    return cfg.network
+    `none` is for boundary testing / offline agents (BUILD_SPEC §16).
+
+    Fails loud on proxy mode + the E2B backend: the key broker isn't wired
+    there yet, and silently downgrading to egress would forward the key into
+    the microVM under the banner of 'proxy protection' (improvement plan,
+    step 19)."""
+    network = "none" if getattr(args, "no_network", False) else cfg.network
+    if network == "proxy" and cfg.backend == "e2b":
+        raise ControllerError(
+            "SANDKEEP_NETWORK=proxy (key broker) is not supported on the e2b "
+            "backend yet — use the Docker backend for broker protection, or set "
+            "network to none/egress"
+        )
+    return network
 
 
 def _warn_if_no_network(network: str) -> None:

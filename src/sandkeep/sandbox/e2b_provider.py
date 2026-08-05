@@ -126,6 +126,20 @@ class E2BProvider(SandboxProvider):
         repo = Path(repo_path).resolve()
         if not repo.is_dir():
             raise SandboxError(f"repo path does not exist: {repo}")
+        # Fail loud rather than silently degrade: proxy mode (key broker + egress
+        # allowlist) is not available on E2B yet. The basic SDK exposes no inbound
+        # tunnel or per-host allowlist, and running the broker inside the same
+        # microVM would put the key back within the agent's reach — defeating the
+        # point. Until E2B parity lands (improvement plan, step 19), a caller who
+        # asked for proxy protection must not quietly get an egress run with the
+        # key forwarded into the VM. Use the Docker backend for key-broker
+        # protection, or SANDKEEP_NETWORK=none/egress on E2B.
+        if self.config.network == "proxy":
+            raise SandboxError(
+                "SANDKEEP_NETWORK=proxy (key broker) is not supported on the E2B "
+                "backend yet — use the Docker backend for broker protection, or "
+                "set network to none/egress"
+            )
         opts = {"api_key": self.config.api_key} if self.config.api_key else {}
         try:
             # e2b SDK v2: Sandbox.create(...) is the constructor; network="none"
