@@ -185,6 +185,28 @@ def _warn_if_no_network(network: str) -> None:
         )
 
 
+def _warn_repo_exposure(cfg: Config, repo: str) -> None:
+    """Read-only ≠ unreadable: warn before a run if the repo the agent will be
+    able to read contains secret-shaped content (improvement plan, step 15)."""
+    if not cfg.scan_repo_secrets:
+        return
+    from .provisioner import scan_repo_secrets
+
+    try:
+        exposed = scan_repo_secrets(repo)
+    except OSError:
+        return
+    if exposed:
+        print(f"⚠ this repo contains {len(exposed)} apparent secret(s) the agent "
+              "will be able to read from /src (read-only ≠ unreadable):",
+              file=sys.stderr)
+        for f in exposed[:5]:
+            print(f"    {f}", file=sys.stderr)
+        if len(exposed) > 5:
+            print(f"    … and {len(exposed) - 5} more", file=sys.stderr)
+        print("  (set SANDKEEP_SCAN_SECRETS=off to silence)", file=sys.stderr)
+
+
 def _warn_if_browser(browser: bool) -> None:
     if browser:
         print(
@@ -299,6 +321,7 @@ def _cmd_run(cfg: Config, args: argparse.Namespace) -> int:
         return 2
     network = _resolve_network(cfg, args)
     print(security_banner(cfg, network), file=sys.stderr)
+    _warn_repo_exposure(cfg, args.repo)
     _warn_if_no_network(network)
     browser = _resolve_browser(cfg, args, network)
     _warn_if_browser(browser)
@@ -352,6 +375,7 @@ def _cmd_batch(cfg: Config, args: argparse.Namespace) -> int:
         return 2
     network = _resolve_network(cfg, args)
     print(security_banner(cfg, network), file=sys.stderr)
+    _warn_repo_exposure(cfg, args.repo)
     _warn_if_no_network(network)
     browser = _resolve_browser(cfg, args, network)
     _warn_if_browser(browser)
@@ -390,6 +414,7 @@ def _cmd_shell(cfg: Config, args: argparse.Namespace) -> int:
         return 2
     network = _resolve_network(cfg, args)
     print(security_banner(cfg, network), file=sys.stderr)
+    _warn_repo_exposure(cfg, args.repo)
     print("provisioning sandbox — your repo is mounted read-only, work happens "
           "on a clone inside\n", file=sys.stderr)
     _warn_if_no_network(network)

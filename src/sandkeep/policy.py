@@ -126,6 +126,19 @@ def cross_check_files(claimed: list[str], patch_text: str) -> RiskFlag | None:
     return RiskFlag("contract-mismatch", "; ".join(bits))
 
 
+def find_secrets_in_text(text: str) -> list[str]:
+    """Secret-shaped hits anywhere in `text` (not just added lines), for the
+    pre-provision scan of what /src exposes to the agent (step 15). Returns the
+    labels of matches, one per line at most."""
+    out: list[str] = []
+    for line in text.splitlines():
+        for pattern, label in _SECRET_LINE_PATTERNS:
+            if re.search(pattern, line):
+                out.append(label)
+                break
+    return out
+
+
 def _added_lines(patch_text: str) -> list[str]:
     """Lines added by the patch (body '+' lines, excluding the '+++' header)."""
     out = []

@@ -66,6 +66,11 @@ class Config:
     gate: str = "local"
     git_remote: str = "origin"
     pr_base: str = "main"
+    # Repo read-exposure (improvement plan, step 15). full_history: clone deep
+    # history into the sandbox (default off = shallow, so the clone carries no
+    # deep history). scan_repo_secrets: scan what /src exposes and warn/audit.
+    full_history: bool = False
+    scan_repo_secrets: bool = True
     backend: str = DEFAULT_BACKEND
     e2b_template: str = DEFAULT_E2B_TEMPLATE
     # Optional test-gated merge: a command run INSIDE the sandbox against the
@@ -103,6 +108,12 @@ class Config:
             raise ValueError(f"SANDKEEP_GATE must be one of {GATE_MODES}, got {cfg.gate!r}")
         cfg.git_remote = os.environ.get("SANDKEEP_GIT_REMOTE", cfg.git_remote)
         cfg.pr_base = os.environ.get("SANDKEEP_PR_BASE", cfg.pr_base)
+        if "SANDKEEP_FULL_HISTORY" in os.environ:
+            cfg.full_history = os.environ["SANDKEEP_FULL_HISTORY"].lower() in (
+                "1", "on", "true", "yes")
+        if "SANDKEEP_SCAN_SECRETS" in os.environ:
+            cfg.scan_repo_secrets = os.environ["SANDKEEP_SCAN_SECRETS"].lower() not in (
+                "0", "off", "false", "no")
         cfg.backend = os.environ.get("SANDKEEP_BACKEND", cfg.backend)
         if cfg.backend not in BACKENDS:
             raise ValueError(

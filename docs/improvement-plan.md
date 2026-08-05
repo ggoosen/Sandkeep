@@ -563,6 +563,19 @@ same host; a `codex` run in proxy mode reaches OpenAI through the broker without
 
 ### Step 15 — Limit what the agent can read from the repo
 
+> **Status (shipped, host-verified; partial by design).** Two pieces landed:
+> (1) a **pre-provision secret scan** of the repo — reusing `policy`'s patterns
+> — that warns at run time ("this repo contains N apparent secrets the agent can
+> read") and audits `repo_secret_exposure`; (2) a **shallow, `file://` clone by
+> default** so the *clone* carries no deep history, with `SANDKEEP_FULL_HISTORY`
+> to opt back in. Host-tested (`tests/test_repo_exposure.py`). **Honest limit:**
+> `/src` itself is still a full read-only mount, so the agent can read the host
+> repo's deep history directly regardless of clone depth — a truly
+> history-stripped `/src` means provisioning from a shallow *copy* and mounting
+> that (stateful host temp tied to the sandbox lifecycle); noted in-code as the
+> deeper follow-up. The scan is the piece that actually tells the user what's
+> exposed today.
+
 **Problem.** Read-only `/src` exposes the **entire** working tree *and full git history*,
 so any secret ever committed is readable by the untrusted agent. Nothing surfaces this.
 

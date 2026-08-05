@@ -146,6 +146,8 @@ class Controller:
             handle = provision(
                 task, self.provider, self.store, self.audit, self._agent_env(driver),
                 trace_id=new_trace_id(), exec_timeout=self.config.exec_timeout_seconds,
+                shallow=not self.config.full_history,
+                scan_secrets=self.config.scan_repo_secrets,
             )
         except (ProvisioningError, SandboxError) as exc:
             self._fail(task, handle, f"provisioning failed: {exc}")
@@ -285,6 +287,8 @@ class Controller:
             handle = provision(
                 task, self.provider, self.store, self.audit, self._agent_env(driver),
                 trace_id=new_trace_id(), exec_timeout=self.config.exec_timeout_seconds,
+                shallow=not self.config.full_history,
+                scan_secrets=self.config.scan_repo_secrets,
             )
         except (ProvisioningError, SandboxError) as exc:
             self._fail(task, handle, f"provisioning failed: {exc}")

@@ -68,7 +68,7 @@ def _provisionable(provider, monkeypatch):
     can reach the RUNNING state without the full docker provisioner."""
     import sandkeep.controller as ctrl
 
-    def fake_provision(task, prov, store, audit, env, *, trace_id, exec_timeout):
+    def fake_provision(task, prov, store, audit, env, *, trace_id, exec_timeout, **kw):
         handle = prov.create(task.repo_path, env)
         store.update_fields(task.id, sandbox_id=handle.id, base_ref="HEAD")
         store.update_state(task.id, TaskState.PROVISIONING, trace_id, "prov")
