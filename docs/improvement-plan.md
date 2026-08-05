@@ -9,12 +9,16 @@ must pass after every step.
 
 ## Ordering at a glance
 
-| Milestone | Steps | Theme |
-|---|---|---|
-| **A — Foundations** | 4, 8, 9, 10, 6 | CI that enforces the boundary suite; trivial correctness wins; doc truth |
-| **B — Host hardening** | 2, 3, 5 | the accept path, crash recovery, honest violation handling |
-| **C — Boundary upgrade** | 1 | key broker + egress allowlist, built locally |
-| **D — Ecosystem** | 7 | a real second agent driver |
+**Status: all 10 steps implemented.** Each shipped on branch
+`claude/sandkeep-review-improve-q8v3ib` with its own commit + acceptance tests;
+step 5's `stream-json` sub-item is a documented deferral (see its status note).
+
+| Milestone | Steps | Theme | Status |
+|---|---|---|---|
+| **A — Foundations** | 4, 8, 9, 10, 6 | CI that enforces the boundary suite; trivial correctness wins; doc truth | ✅ done |
+| **B — Host hardening** | 2, 3, 5 | the accept path, crash recovery, honest violation handling | ✅ done |
+| **C — Boundary upgrade** | 1 | key broker + egress allowlist, built locally | ✅ done |
+| **D — Ecosystem** | 7 | a real second agent driver | ✅ done |
 
 Dependencies: 4 first (everything after lands gated); 5 benefits from 3's error paths;
 1 supersedes part of 5's detection story; 7 last (touches image templating + runner,
