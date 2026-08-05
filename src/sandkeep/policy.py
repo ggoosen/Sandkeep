@@ -49,6 +49,13 @@ _PATH_RULES: list[tuple[str, str, list[str]]] = [
         r"(^|/)pnpm-lock\.yaml$", r"(^|/)Cargo\.(toml|lock)$", r"(^|/)go\.(mod|sum)$",
         r"(^|/)Gemfile(\.lock)?$",
     ]),
+    # Agent-controlled tool config that would execute on the host in a later
+    # session (Claude Code hooks/permissions) or in CI. .claude/ is normally
+    # excluded from the patch (diff._EXCLUDE_PATHSPECS); this flag is
+    # defence-in-depth for anything that slips through.
+    ("agent-config", "agent/editor tool config (hooks, permissions)", [
+        r"(^|/)\.claude/", r"(^|/)\.cursor/", r"(^|/)\.vscode/tasks\.json$",
+    ]),
 ]
 
 # Content-based: added lines (in the patch body) that look like a hardcoded
@@ -86,7 +93,37 @@ def analyze_patch(patch_text: str) -> list[RiskFlag]:
                 flags.add(RiskFlag("secret", f"possible {label} in added line: {snippet}"))
                 break  # one flag per line is enough
 
+    if _has_binary_hunk(patch_text):
+        flags.add(RiskFlag("binary", "patch contains a binary hunk (opaque to review)"))
+
     return sorted(flags, key=lambda f: (f.category, f.detail))
+
+
+def _has_binary_hunk(patch_text: str) -> bool:
+    """A binary change can't be eyeballed at the gate — flag it (advisory)."""
+    return (
+        "GIT binary patch" in patch_text
+        or bool(re.search(r"^Binary files .* differ$", patch_text, re.MULTILINE))
+    )
+
+
+def cross_check_files(claimed: list[str], patch_text: str) -> RiskFlag | None:
+    """Advisory flag when the contract's files_changed disagrees with the paths
+    actually in the patch — an agent under-reporting what it touched. None if
+    they match (order-insensitive) or nothing was claimed."""
+    if not claimed:
+        return None
+    actual = set(diff.files_in_patch(patch_text))
+    if set(claimed) == actual:
+        return None
+    missing = sorted(actual - set(claimed))
+    extra = sorted(set(claimed) - actual)
+    bits = []
+    if missing:
+        bits.append(f"in patch but not reported: {', '.join(missing)}")
+    if extra:
+        bits.append(f"reported but not in patch: {', '.join(extra)}")
+    return RiskFlag("contract-mismatch", "; ".join(bits))
 
 
 def _added_lines(patch_text: str) -> list[str]:

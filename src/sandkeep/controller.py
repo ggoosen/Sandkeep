@@ -291,6 +291,7 @@ class Controller:
             patch_path = diff.extract_patch(
                 self.provider, handle, task, self.config.outputs_dir,
                 exec_timeout=self.config.exec_timeout_seconds,
+                max_bytes=self.config.max_patch_bytes,
             )
         except diff.DiffError as exc:
             self._fail(task, handle, f"could not extract diff: {exc}")
@@ -380,10 +381,30 @@ class Controller:
     # -- coordination & policy (Phase 3, read-only, host-side) ------------
 
     def risk_flags(self, task: Task) -> list[policy.RiskFlag]:
-        """Risk flags for a task's patch (empty if no patch yet)."""
+        """Risk flags for a task's patch (empty if no patch yet), including an
+        advisory contract-mismatch flag when the agent's claimed files_changed
+        disagrees with what the patch actually touches."""
         if not task.patch_path or not Path(task.patch_path).exists():
             return []
-        return policy.analyze_patch(Path(task.patch_path).read_text())
+        patch_text = Path(task.patch_path).read_text()
+        flags = policy.analyze_patch(patch_text)
+        mismatch = policy.cross_check_files(self._claimed_files(task), patch_text)
+        if mismatch:
+            flags.append(mismatch)
+        return flags
+
+    def _claimed_files(self, task: Task) -> list[str]:
+        """The files_changed the agent's contract claimed (from the sidecar
+        results.json written at land time). Empty if none/unreadable."""
+        path = self.config.outputs_dir / f"{task.id}.results.json"
+        if not path.exists():
+            return []
+        try:
+            data = json.loads(path.read_text())
+        except (json.JSONDecodeError, OSError):
+            return []
+        claimed = data.get("files_changed")
+        return claimed if isinstance(claimed, list) else []
 
     def conflicts(self, task: Task) -> list[policy.Conflict]:
         """Other tasks awaiting review whose patches touch the same files."""

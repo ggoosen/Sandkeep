@@ -106,17 +106,36 @@ def test_apply_to_fresh_branch_lands_commit_and_restores_user(
     assert "# validated" in git("show", f"sandkeep-accepted/{task.id}:parse_config.py")
 
 
-def test_apply_refuses_dirty_host_tree(provider, edited_sandbox, host_repo, tmp_path):
+def test_apply_tolerates_dirty_host_tree(provider, edited_sandbox, host_repo, tmp_path):
+    """Accept now applies in a throwaway git worktree, so a dirty host tree is
+    no longer a failure — and the user's uncommitted work is left untouched."""
     task, handle = edited_sandbox
     patch = extract_patch(provider, handle, task, tmp_path / "outputs")
     (Path(host_repo) / "uncommitted.txt").write_text("wip")
     import subprocess
 
-    subprocess.run(["git", "-C", str(host_repo), "add", "uncommitted.txt"], check=True)
-    with pytest.raises(DiffError, match="dirty"):
-        apply_to_fresh_branch(
-            host_repo, task.base_ref, f"sandkeep-accepted/{task.id}", patch, "msg"
-        )
+    def git(*args: str) -> str:
+        return subprocess.run(
+            ["git", "-C", str(host_repo), *args], capture_output=True, text=True
+        ).stdout.strip()
+
+    sha = apply_to_fresh_branch(
+        host_repo, task.base_ref, f"sandkeep-accepted/{task.id}", patch, "msg"
+    )
+    assert sha
+    assert git("rev-parse", "--abbrev-ref", "HEAD") == "main"
+    assert (Path(host_repo) / "uncommitted.txt").read_text() == "wip"  # untouched
+    assert "# validated" in git("show", f"sandkeep-accepted/{task.id}:parse_config.py")
+
+
+def test_apply_refuses_duplicate_accept(provider, edited_sandbox, host_repo, tmp_path):
+    """A second accept onto the same branch fails loud instead of clobbering."""
+    task, handle = edited_sandbox
+    patch = extract_patch(provider, handle, task, tmp_path / "outputs")
+    branch = f"sandkeep-accepted/{task.id}"
+    apply_to_fresh_branch(host_repo, task.base_ref, branch, patch, "msg")
+    with pytest.raises(DiffError, match="already"):
+        apply_to_fresh_branch(host_repo, task.base_ref, branch, patch, "msg")
 
 
 def test_config_outputs_dir_used_for_patches(tmp_path, monkeypatch):

@@ -18,6 +18,7 @@ DEFAULT_BACKEND = "docker"  # "docker" (Phase 0–1 harness) | "e2b" (microVM, P
 BACKENDS = ("docker", "e2b")
 DEFAULT_E2B_TEMPLATE = "sandkeep"
 DEFAULT_MAX_BUDGET_USD = 5.0  # hard spend cap passed to the agent CLI per run
+DEFAULT_MAX_PATCH_BYTES = 5 * 1024 * 1024  # cap on the size of a returned patch
 DEFAULT_TASK_TIMEOUT_SECONDS = 1800  # wall-clock cap for the agent run
 DEFAULT_EXEC_TIMEOUT_SECONDS = 120  # cap for individual sandbox exec calls
 DEFAULT_IMAGE = "sandkeep-sandbox:latest"
@@ -42,6 +43,7 @@ class Config:
     # max_turns is gone: the upstream claude CLI removed the flag (see
     # agent/claude.py). Runs are bounded by max_budget_usd + task timeout.
     max_budget_usd: float = DEFAULT_MAX_BUDGET_USD
+    max_patch_bytes: int = DEFAULT_MAX_PATCH_BYTES
     task_timeout_seconds: int = DEFAULT_TASK_TIMEOUT_SECONDS
     exec_timeout_seconds: int = DEFAULT_EXEC_TIMEOUT_SECONDS
 
@@ -77,6 +79,8 @@ class Config:
                 )
         if "SANDKEEP_TASK_TIMEOUT" in os.environ:
             cfg.task_timeout_seconds = int(os.environ["SANDKEEP_TASK_TIMEOUT"])
+        if "SANDKEEP_MAX_PATCH_BYTES" in os.environ:
+            cfg.max_patch_bytes = int(os.environ["SANDKEEP_MAX_PATCH_BYTES"])
         return cfg
 
     @property
