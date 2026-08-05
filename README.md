@@ -145,7 +145,7 @@ It's advisory — the human still decides. Nothing auto-blocks, nothing auto-mer
 
 ## Pluggable agents
 
-The boundary is **agent-agnostic** — containment comes from the sandbox, not from which agent runs inside it. Agents live behind a single `AgentDriver` interface (`claude` is the built-in default), selectable with `--agent` / `SANDKEEP_AGENT`. Adding another CLI agent (e.g. Codex) is a small, contained change: register a driver and teach the image to install its CLI. An unknown agent fails loud on the host before any sandbox is created.
+The boundary is **agent-agnostic** — containment comes from the sandbox, not from which agent runs inside it. Agents live behind a single `AgentDriver` interface, selectable with `--agent` / `SANDKEEP_AGENT`. Two ship today: **`claude`** (the default, writes a results contract) and **`codex`** (the OpenAI Codex CLI, a `produces_contract=False` driver that lands via host-side diff synthesis) — proof the seam works, not just an assertion. Adding another CLI agent is a small, contained change: register a driver and teach the image to install its CLI. An unknown agent fails loud on the host before any sandbox is created, and the unmodified boundary suite passes whichever agent is selected. *(Codex CLI flags should be re-verified with `codex --help` against the installed version, per the same discipline as the Claude driver.)*
 
 ## Capability authoring (per-repo skills)
 
