@@ -16,6 +16,7 @@ Hard requirements honoured here:
 
 from __future__ import annotations
 
+import os
 import subprocess
 import uuid
 from dataclasses import dataclass, field
@@ -46,8 +47,12 @@ class DockerConfig:
     extra_run_args: list[str] = field(default_factory=list)
 
 
-def _run(cmd: list[str], timeout: int | None = None) -> subprocess.CompletedProcess[bytes]:
-    return subprocess.run(cmd, capture_output=True, timeout=timeout)
+def _run(
+    cmd: list[str],
+    timeout: int | None = None,
+    env: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[bytes]:
+    return subprocess.run(cmd, capture_output=True, timeout=timeout, env=env)
 
 
 class DockerProvider(SandboxProvider):
@@ -76,10 +81,16 @@ class DockerProvider(SandboxProvider):
             "--volume", f"{repo}:{SRC_MOUNT}:ro",
             *self.config.extra_run_args,
         ]
-        for key, value in env.items():
-            cmd += ["--env", f"{key}={value}"]
+        # Secrets stay OFF the argv: `--env KEY` (no value) makes the docker
+        # client read the value from its own process environment, so it never
+        # appears in host `ps`/`/proc/*/cmdline`. (It is still visible in
+        # `docker inspect` — Docker stores container env by design; removing
+        # the key from the sandbox entirely is TODO(phase-2): secret broker.)
+        for key in env:
+            cmd += ["--env", key]
         cmd += [self.config.image, "sleep", "infinity"]
-        proc = self._run(cmd, timeout=60)
+        run_env = {**os.environ, **env} if env else None
+        proc = self._run(cmd, timeout=60, env=run_env)
         if proc.returncode != 0:
             raise SandboxError(f"docker run failed: {proc.stderr.decode(errors='replace')}")
         return SandboxHandle(id=name, workdir=WORKDIR)

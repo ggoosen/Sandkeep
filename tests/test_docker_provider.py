@@ -23,9 +23,11 @@ class FakeRunner:
     stderr: bytes = b""
     raise_timeout: bool = False
     calls: list[list[str]] = field(default_factory=list)
+    envs: list[dict[str, str] | None] = field(default_factory=list)
 
-    def __call__(self, cmd: list[str], timeout: int | None = None):
+    def __call__(self, cmd: list[str], timeout: int | None = None, env=None):
         self.calls.append(cmd)
+        self.envs.append(env)
         if self.raise_timeout:
             raise subprocess.TimeoutExpired(cmd, timeout or 0)
         return subprocess.CompletedProcess(cmd, self.returncode, self.stdout, self.stderr)
@@ -70,10 +72,23 @@ def test_create_never_mounts_docker_socket(provider, runner, tmp_path):
     assert "docker.sock" not in " ".join(runner.calls[0])
 
 
-def test_create_passes_env(provider, runner, tmp_path):
-    provider.create(str(tmp_path), env={"ANTHROPIC_API_KEY": "sk-test"})
+def test_create_passes_env_without_secret_on_argv(provider, runner, tmp_path):
+    """Secrets travel as `--env KEY` with the value in the docker client's
+    process env — never in the argv (host ps / /proc/*/cmdline)."""
+    provider.create(str(tmp_path), env={"ANTHROPIC_API_KEY": "sk-test-secret"})
     cmd = runner.calls[0]
-    assert "ANTHROPIC_API_KEY=sk-test" in cmd[cmd.index("--env") + 1]
+    assert cmd[cmd.index("--env") + 1] == "ANTHROPIC_API_KEY"
+    assert "sk-test-secret" not in " ".join(cmd)
+    assert runner.envs[0] is not None
+    assert runner.envs[0]["ANTHROPIC_API_KEY"] == "sk-test-secret"
+
+
+def test_create_without_env_inherits_parent_environment(provider, runner, tmp_path):
+    """No secrets to forward → env=None so the docker client keeps its normal
+    environment (PATH, DOCKER_HOST, …)."""
+    provider.create(str(tmp_path), env={})
+    assert runner.envs[0] is None
+    assert "--env" not in runner.calls[0]
 
 
 def test_create_rejects_missing_repo(provider, tmp_path):
