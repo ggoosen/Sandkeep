@@ -43,6 +43,24 @@ SECURITY_BANNER = (
 )
 
 
+def security_banner(cfg: Config, network: str) -> str:
+    """A banner that reports the REAL posture (backend + network), not a fixed
+    warning (improvement plan, step 13). The user should always know exactly
+    how contained the run they're about to start actually is."""
+    if cfg.posture == "microvm":
+        head = "🔒 posture: microVM (E2B) — hardware-isolated boundary."
+    elif network == "proxy":
+        head = ("🔒 posture: hardened Docker + key broker (proxy). Docker is a "
+                "shared-kernel boundary — a determined agent may still escape; "
+                "use the microVM backend for a boundary you can point to in a "
+                "security review.")
+    else:
+        head = ("⚠  posture: Docker (mechanics harness, NOT a security boundary)"
+                f" + {network} network. Do not run agents or code you genuinely "
+                "distrust; use SANDKEEP_NETWORK=proxy and/or the microVM backend.")
+    return head + "\n"
+
+
 def _make_provider(cfg: Config, *, network: str, agent: str = DEFAULT_AGENT,
                    browser: bool = False):
     """Construct the configured sandbox backend (SANDKEEP_BACKEND), using the
@@ -269,10 +287,8 @@ def _cmd_run(cfg: Config, args: argparse.Namespace) -> int:
         return 2
     if cfg.backend == "e2b" and not _ensure_named_secret(cfg, "E2B_API_KEY"):
         return 2
-    print(SECURITY_BANNER, file=sys.stderr)
-    # the agent needs egress to api.anthropic.com by default — gated here on
-    # purpose; TODO(phase-2): brokering egress *allowlist* proxy + secret broker.
     network = _resolve_network(cfg, args)
+    print(security_banner(cfg, network), file=sys.stderr)
     _warn_if_no_network(network)
     browser = _resolve_browser(cfg, args, network)
     _warn_if_browser(browser)
@@ -324,8 +340,8 @@ def _cmd_batch(cfg: Config, args: argparse.Namespace) -> int:
         print("error: no tasks — pass --task (repeatable) or --tasks-file",
               file=sys.stderr)
         return 2
-    print(SECURITY_BANNER, file=sys.stderr)
     network = _resolve_network(cfg, args)
+    print(security_banner(cfg, network), file=sys.stderr)
     _warn_if_no_network(network)
     browser = _resolve_browser(cfg, args, network)
     _warn_if_browser(browser)
@@ -362,12 +378,10 @@ def _cmd_shell(cfg: Config, args: argparse.Namespace) -> int:
         return 2
     if cfg.backend == "e2b" and not _ensure_named_secret(cfg, "E2B_API_KEY"):
         return 2
-    print(SECURITY_BANNER, file=sys.stderr)
+    network = _resolve_network(cfg, args)
+    print(security_banner(cfg, network), file=sys.stderr)
     print("provisioning sandbox — your repo is mounted read-only, work happens "
           "on a clone inside\n", file=sys.stderr)
-    # interactive agent needs egress to api.anthropic.com by default (gated on
-    # purpose; TODO(phase-2): brokering egress allowlist proxy)
-    network = _resolve_network(cfg, args)
     _warn_if_no_network(network)
     browser = _resolve_browser(cfg, args, network)
     _warn_if_browser(browser)
@@ -522,6 +536,71 @@ def _cmd_reject(cfg: Config, args: argparse.Namespace) -> int:
     controller.reject(args.task_id)
     print(f"task {args.task_id} rejected; sandbox discarded, host repo untouched")
     return 0
+
+
+def _docker_available() -> bool:
+    import shutil
+    if shutil.which("docker") is None:
+        return False
+    import subprocess
+    return subprocess.run(["docker", "info"], capture_output=True).returncode == 0
+
+
+def _image_present(tag: str) -> bool:
+    import subprocess
+    return subprocess.run(["docker", "image", "inspect", tag],
+                          capture_output=True).returncode == 0
+
+
+def doctor_checks(cfg: Config) -> list[tuple[str, bool, str]]:
+    """Readiness checks for the active posture (improvement plan, step 13).
+    Pure-ish: returns (label, ok, detail) so it's testable and the CLI just
+    renders it. Only inspects images when the docker daemon is up."""
+    checks: list[tuple[str, bool, str]] = []
+    checks.append(("posture", True, f"{cfg.posture} (backend: {cfg.backend})"))
+    if cfg.backend == "docker":
+        up = _docker_available()
+        checks.append(("docker daemon", up,
+                       "reachable" if up else "not reachable — start Docker"))
+        checks.append(("sandbox image", up and _image_present(cfg.image),
+                       cfg.image if up else "unknown (daemon down)"))
+        if cfg.network == "proxy":
+            checks.append(("broker image", up and _image_present(cfg.broker_image),
+                           "build with `image build --with-broker`"))
+        if cfg.browser:
+            checks.append(("browser image", up and _image_present(cfg.browser_image),
+                           "build with `image build --with-browser`"))
+    else:  # e2b
+        try:
+            import e2b  # noqa: F401
+            has_pkg = True
+        except ImportError:
+            has_pkg = False
+        checks.append(("e2b package", has_pkg,
+                       "installed" if has_pkg else "pip install 'sandkeep[e2b]'"))
+        has_key = bool(load_secret(cfg, "E2B_API_KEY"))
+        checks.append(("E2B_API_KEY", has_key,
+                       "present" if has_key else "run `sandkeep auth set E2B_API_KEY`"))
+    key = bool(load_secret(cfg, "ANTHROPIC_API_KEY"))
+    checks.append(("ANTHROPIC_API_KEY", key,
+                   "present" if key else "run `sandkeep auth set`"))
+    return checks
+
+
+def _cmd_doctor(cfg: Config, args: argparse.Namespace) -> int:
+    checks = doctor_checks(cfg)
+    print(f"sandkeep doctor — posture: {cfg.posture}\n")
+    all_ok = True
+    for label, ok, detail in checks:
+        mark = "✓" if ok else "✗"
+        if not ok:
+            all_ok = False
+        print(f"  {mark}  {label:20}  {detail}")
+    if cfg.posture == "hardened-docker":
+        print("\nnote: Docker is a shared-kernel boundary. For a boundary you can "
+              "point to in a security review, use the microVM backend "
+              "(SANDKEEP_POSTURE=microvm / SANDKEEP_BACKEND=e2b).")
+    return 0 if all_ok else 1
 
 
 class _RemovedFlag(argparse.Action):
@@ -680,6 +759,7 @@ def build_parser() -> argparse.ArgumentParser:
     test.add_argument("--test-cmd", dest="test_cmd", default=None,
                       help="test command (overrides SANDKEEP_TEST_COMMAND)")
 
+    sub.add_parser("doctor", help="report the active containment posture + readiness")
     sub.add_parser("ps", help="list live sandboxes and their task state")
     gc = sub.add_parser("gc", help="reap orphaned/stale sandboxes")
     gc.add_argument("--include-review", action="store_true",
@@ -705,6 +785,7 @@ def main(argv: list[str] | None = None) -> int:
             "shell": _cmd_shell,
             "skills": _cmd_skills,
             "test": _cmd_test,
+            "doctor": _cmd_doctor,
             "ps": _cmd_ps,
             "gc": _cmd_gc,
             "status": _cmd_status,

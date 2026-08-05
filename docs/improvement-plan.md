@@ -492,6 +492,15 @@ can't touch a host-root-owned path.
 
 ### Step 13 — Make containment the default, with honest parity
 
+> **Status (shipped; default stays hardened-docker, as designed).**
+> `SANDKEEP_POSTURE` (`hardened-docker` | `microvm`) selects the backend;
+> `Config.posture` is derived from the backend so it can never disagree with what
+> runs. The security banner now reports the **real** posture (microVM / hardened
+> Docker + broker / open Docker) instead of a fixed warning, and `sandkeep
+> doctor` reports readiness (daemon, images, keys) with fix hints. The default is
+> **not** flipped to microVM because Step 19 (E2B parity) is blocked — exactly
+> the gate this step specified. Host-tested in `tests/test_posture.py`.
+
 **Problem.** Even hardened, Docker isn't a microVM. The *default* posture should be the
 one the product's security claim depends on — today a user has to know to set
 `SANDKEEP_BACKEND=e2b`, and even then loses the broker and browser.

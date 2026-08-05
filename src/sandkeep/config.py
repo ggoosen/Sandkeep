@@ -27,6 +27,11 @@ DEFAULT_BROWSER_IMAGE = "sandkeep-browser:latest"
 GATE_MODES = ("local", "draft-pr")
 DEFAULT_BACKEND = "docker"  # "docker" (Phase 0–1 harness) | "e2b" (microVM, Phase 2)
 BACKENDS = ("docker", "e2b")
+# Posture is a friendly selector over backend (improvement plan, step 13): it
+# picks the backend and the banner/doctor report the *real* posture. The default
+# stays hardened-docker until E2B reaches broker+browser parity (step 19).
+POSTURES = ("hardened-docker", "microvm")
+_POSTURE_BACKEND = {"hardened-docker": "docker", "microvm": "e2b"}
 DEFAULT_E2B_TEMPLATE = "sandkeep"
 DEFAULT_MAX_BUDGET_USD = 5.0  # hard spend cap passed to the agent CLI per run
 DEFAULT_MAX_PATCH_BYTES = 5 * 1024 * 1024  # cap on the size of a returned patch
@@ -103,6 +108,13 @@ class Config:
             raise ValueError(
                 f"SANDKEEP_BACKEND must be one of {BACKENDS}, got {cfg.backend!r}"
             )
+        # Posture is an input alias for backend (explicit SANDKEEP_BACKEND, read
+        # just above, still wins if both are set).
+        if "SANDKEEP_POSTURE" in os.environ and "SANDKEEP_BACKEND" not in os.environ:
+            posture = os.environ["SANDKEEP_POSTURE"]
+            if posture not in POSTURES:
+                raise ValueError(f"SANDKEEP_POSTURE must be one of {POSTURES}, got {posture!r}")
+            cfg.backend = _POSTURE_BACKEND[posture]
         cfg.e2b_template = os.environ.get("SANDKEEP_E2B_TEMPLATE", cfg.e2b_template)
         cfg.test_command = os.environ.get("SANDKEEP_TEST_COMMAND", cfg.test_command)
         if "SANDKEEP_MAX_BUDGET_USD" in os.environ:
@@ -122,6 +134,12 @@ class Config:
         if "SANDKEEP_MAX_PATCH_BYTES" in os.environ:
             cfg.max_patch_bytes = int(os.environ["SANDKEEP_MAX_PATCH_BYTES"])
         return cfg
+
+    @property
+    def posture(self) -> str:
+        """The friendly containment posture label, derived from the backend so
+        it can never disagree with what actually runs (step 13)."""
+        return "microvm" if self.backend == "e2b" else "hardened-docker"
 
     @property
     def db_path(self) -> Path:
