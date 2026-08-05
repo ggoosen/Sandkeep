@@ -19,6 +19,10 @@ step 5's `stream-json` sub-item is a documented deferral (see its status note).
 | **B — Host hardening** | 2, 3, 5 | the accept path, crash recovery, honest violation handling | ✅ done |
 | **C — Boundary upgrade** | 1 | key broker + egress allowlist, built locally | ✅ done |
 | **D — Ecosystem** | 7 | a real second agent driver | ✅ done |
+| **E — Capability bridges** | 11 | browser (CDP) bridge — a capability without a hole | 📋 spec'd |
+
+Milestone E is a **post-review follow-up** (from the SandVault comparison); it is
+specified below, not yet built.
 
 Dependencies: 4 first (everything after lands gated); 5 benefits from 3's error paths;
 1 supersedes part of 5's detection story; 7 last (touches image templating + runner,
@@ -325,6 +329,89 @@ allowlist, keyed per driver.
 host-side pre-sandbox; second-driver run reaches REVIEW via diff synthesis (stub-agent
 CI test + key-gated real e2e); **the unmodified boundary suite passes with the second
 driver selected**; ledger rows attribute cost to the agent.
+
+---
+
+## Milestone E — Capability bridges (post-review, follow-up)
+
+> **Origin.** Comparison against SandVault (webcoyote/sandvault), 2026-08-05. SandVault
+> runs a headless browser *outside* its sandbox and exposes only a Chrome DevTools
+> Protocol (CDP) endpoint inside via an env var, so an agent can drive a browser without
+> the sandbox getting GUI or direct network access. The same "whitelisted bridge" shape
+> is exactly the broker from Step 1 — a controlled intermediary that grants a powerful
+> capability without direct access. This milestone instantiates that pattern for the
+> browser, which proxy mode (Step 1) otherwise makes impossible.
+
+### Step 11 — Browser bridge (CDP over the sandbox's internal network)
+
+**Problem.** In `proxy` mode the sandbox has **no direct egress** — which is the point,
+but it also means an agent asked to *test a web app, screenshot a page, or scrape a
+site* can't launch a browser or reach anything. Even in `egress` mode, running a full
+Chromium inside every task sandbox bloats the image and the in-box attack surface (a
+headful browser is a large, network-facing target we don't want the untrusted agent
+driving from inside the boundary). Today there is no way to give a task browser
+capability without weakening containment.
+
+**Design.** Mirror the broker: a **browser sidecar** the agent talks to over a
+localhost-style endpoint, never a browser the agent runs itself.
+
+1. **`browser` sidecar container** (`sandbox_image/browser/`): a headless Chromium
+   (the environment already ships one at `/opt/pw-browsers/chromium` with Playwright
+   configured — reuse it; `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1`) launched with
+   `--remote-debugging-address=0.0.0.0 --remote-debugging-port=9222 --headless=new
+   --no-sandbox` inside its own container. It exposes **only** the CDP endpoint on the
+   task's internal network, reachable at `http://browser:9222` (network alias, same
+   trick as `broker`). It runs non-root with `--cap-drop ALL`, its own memory/pids caps,
+   and **no writable mount** — it is disposable with the task.
+2. **Egress discipline — reuse the broker.** The browser's *own* outbound traffic must
+   obey the same allowlist as everything else: the browser container attaches to the
+   task's `--internal` network and points `HTTP(S)_PROXY` at the broker, so a page the
+   agent navigates to can only load from allowlisted hosts and every fetch is logged
+   with the trace id (Step 1's ground-truth egress signal now covers browser traffic
+   too). In `egress` mode the browser gets the open bridge; in `none` mode the bridge is
+   not provisioned (nothing to browse) — the CLI says so rather than starting a browser
+   that can reach nothing.
+3. **Wiring, behind the existing seams.** A new `SANDKEEP_BROWSER=on` config flag (+
+   `--browser` on `run`/`shell`/`batch`), default off. When on and the backend supports
+   it, `DockerProvider.create()` stands the browser sidecar up on the same per-task
+   network it already builds for proxy mode (derive `browser`/network names the way
+   `_broker_name`/`_network_name` already do), and `destroy()` tears it down alongside
+   the broker. The controller injects `SANDKEEP_BROWSER_CDP=http://browser:9222` into the
+   sandbox env (the SandVault `SV_BROWSER_ENDPOINT` idea) so the agent's Playwright/
+   Puppeteer connects with `connectOverCDP(process.env.SANDKEEP_BROWSER_CDP)` instead of
+   launching its own. Backends that can't offer it (E2B first cut) leave the env unset
+   and `create()` raises a clear "browser bridge not supported on this backend" if
+   `--browser` was asked for — the same optional-capability degradation `exec_interactive`
+   already uses.
+4. **Invariant check.** Nothing new crosses the return channel: the browser sidecar
+   produces no files, mounts nothing, and its container is discarded with the task. Only
+   the diff still leaves. The agent gains a *capability*, not a hole — its browsing is
+   proxied and logged exactly like its API calls.
+
+**Files.** new `sandbox_image/browser/` (Dockerfile + launch script); `config.py`
+(`SANDKEEP_BROWSER`); `cli.py` (`--browser`, provisioning warning); `sandbox/
+docker_provider.py` (sidecar provision/teardown, reusing the internal-network plumbing);
+`controller.py` (`SANDKEEP_BROWSER_CDP` in `_agent_env`); `sandbox/base.py`
+(optional-capability note); `BUILD_SPEC.md` (new §); tests below.
+
+**Acceptance.**
+- Host-side: with `--browser`, `DockerProvider.create` builds the browser sidecar on the
+  task's internal network and injects `SANDKEEP_BROWSER_CDP`; `destroy` removes it; the
+  sandbox argv/env still carry no secret (`tests/test_browser_bridge.py`, fake runner —
+  same style as `test_proxy_mode.py`).
+- Docker-backed (CI): from inside a `--browser` proxy-mode sandbox, a CDP client
+  connects to `SANDKEEP_BROWSER_CDP` and drives a page; a navigation to an
+  **allowlisted** host succeeds and a navigation to a **disallowed** host is refused and
+  shows up as a broker denial with the trace id; the browser container is gone after
+  `destroy` (`tests/test_browser_boundary.py`).
+- The unmodified boundary suite still passes in all network modes with the bridge both
+  on and off.
+
+**Deferred within this step.** E2B browser-bridge parity (needs a sidecar reachable from
+the microVM — same shape as the broker's E2B follow-up); a screenshot/artifact return
+path (screenshots would be a *new* return-channel artifact and must go through the human
+gate like the patch — spec separately before building, since it widens what leaves the
+sandbox).
 
 ---
 
