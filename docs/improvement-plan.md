@@ -858,6 +858,16 @@ path; the one-shot fallback still works.
 
 ### Step 26 — Close the test blind spots
 
+> **Status (partial; the verifiable pieces shipped).** Closed: **concurrency
+> edges** — concurrent accept of two tasks, and accept-vs-reconcile safety
+> (reconcile never touches REVIEW), host-tested in
+> `tests/test_concurrency_edges.py`; and a **documented, key-gated E2B CI job**
+> (`.github/workflows/e2b-boundary.yml`, manual `workflow_dispatch`) so anyone
+> with a key can reproduce the microVM boundary verification. Still open: a
+> **real interactive-TTY test** — `docker exec -it` needs a pseudo-TTY that CI
+> runners don't provide, so exercising it truly needs a pty harness (the command
+> *construction* is already unit-tested); marked infra-bound.
+
 **Problem.** From the round-1 test review, still open: the real interactive TTY flow is
 monkeypatched (never exercised), concurrency edges (concurrent accept of conflicting
 tasks, accept racing gc) are untested, and E2B containment isn't reproducible in-tree.
