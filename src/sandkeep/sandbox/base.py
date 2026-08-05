@@ -60,6 +60,20 @@ class SandboxProvider(ABC):
             f"{type(self).__name__} does not support interactive sessions"
         )
 
+    def exec_stream(self, handle: SandboxHandle, cmd: list[str], timeout: int):
+        """Run a command, yielding output line-by-line as it arrives, then
+        returning the final ExecResult (improvement plan, step 25).
+
+        Optional capability for live progress + incremental scanning. Backends
+        that only capture one-shot leave this unimplemented; callers fall back
+        to exec(). The real consumer — ClaudeDriver parsing
+        `--output-format stream-json` — is deferred until the event shape can be
+        verified against the installed CLI (§6 discipline); this is the seam it
+        will use, kept honest as a hook, not a stubbed guarantee."""
+        raise NotImplementedError(
+            f"{type(self).__name__} does not support streaming exec"
+        )
+
     @abstractmethod
     def read_file(self, handle: SandboxHandle, path: str) -> str:
         """Read a file from inside the sandbox (used to pull the contract + patch)."""

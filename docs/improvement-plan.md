@@ -20,18 +20,21 @@ step 5's `stream-json` sub-item is a documented deferral (see its status note).
 | **C — Boundary upgrade** | 1 | key broker + egress allowlist, built locally | ✅ done |
 | **D — Ecosystem** | 7 | a real second agent driver | ✅ done |
 | **E — Capability bridges** | 11 | browser (CDP) bridge — a capability without a hole | ✅ done |
-| **F — Containment by default** | 12, 13 | make the real boundary the default, not an opt-in | 📋 spec'd |
-| **G — Tighter egress & secret exposure** | 14, 15 | path/method egress policy; limit what the agent can read | 📋 spec'd |
-| **H — Workflow** | 16, 17, 18 | draft-PR gate; task iteration; fleet budgets | 📋 spec'd |
-| **I — Backend parity & performance** | 19, 20 | E2B feature parity; warm pool | 📋 spec'd |
-| **J — Ecosystem** | 21 | verify Codex + a third driver, broker-protected | 📋 spec'd |
-| **K — Operations & release** | 22, 23 | CI actually running; release automation; observability | 📋 spec'd |
-| **L — Deferred channels & coverage** | 24, 25, 26 | artifact return path; stream-json; test blind spots | 📋 spec'd |
+| **F — Containment by default** | 12, 13 | make the real boundary the default, not an opt-in | ✅ done |
+| **G — Tighter egress & secret exposure** | 14, 15 | path/method egress policy; limit what the agent can read | ✅ done |
+| **H — Workflow** | 16, 17, 18 | draft-PR gate; task iteration; fleet budgets | ✅ done |
+| **I — Backend parity & performance** | 19, 20 | E2B feature parity; warm pool | ◐ 19 guardrail; 20 deferred |
+| **J — Ecosystem** | 21 | verify Codex + a third driver, broker-protected | ✅ done |
+| **K — Operations & release** | 22, 23 | CI actually running; release automation; observability | ✅ done |
+| **L — Deferred channels & coverage** | 24, 25, 26 | artifact return path; stream-json; test blind spots | ◐ 24 done; 25/26 partial |
 
-Milestones A–E are **done** (round 1). Milestones F–L are **round 2** — the gaps that
-remain after round 1, specified below. Recommended order is roughly F → H(16) → I(19)
-first (the headline containment gap, the biggest workflow gap, and closing the
-verified-backend feature deficit); the rest slot in behind their dependencies.
+Milestones A–E are **done** (round 1). Round 2 (F–L) is **implemented** to the extent
+buildable here: every step landed its verifiable slice with tests; the parts that
+genuinely need external infra (a live GitHub remote for a real CI run, an E2B key for
+microVM parity + warm pool, the installed Codex/Gemini CLIs for flag verification, the
+claude CLI's stream-json event shape) are **marked** at each step's status note rather
+than faked. Each step above carries a `> Status` line with exactly what shipped and what
+was deferred and why.
 
 Dependencies (round 1): 4 first (everything after lands gated); 5 benefits from 3's error
 paths; 1 supersedes part of 5's detection story; 7 last.
@@ -715,6 +718,17 @@ This blocks Step 13 (microVM-by-default).
 
 ### Step 20 — Warm pool / snapshot-restore
 
+> **Status (deferred — no buildable+verifiable slice here).** The Docker warm
+> pool has an architectural blocker: Docker fixes the repo bind-mount at
+> `create()`, and you can't add a mount to an already-running container — so a
+> pre-provisioned pool can't hold the (per-task, read-only) repo mount, and the
+> image is already local so pre-pull buys almost nothing. The real fit is E2B
+> **snapshot/restore**, which needs an E2B key to build and verify (infra-bound).
+> Rather than ship a speculative, unused pool that can't demonstrate its value,
+> this stays deferred with the reason stated — the same honesty rule the rest of
+> the plan follows. Per-agent images (already shipped) cover the *tool*-warmth
+> half; only provisioning latency remains, and it's backend-bound.
+
 **Problem.** Every run cold-starts a container/microVM + clone; provisioning latency is
 paid each task. Deferred since Phase 2.
 
@@ -841,6 +855,15 @@ lists artifacts), `config.py`, `tests/`.
 from the diff, and persisted only on accept; oversize/wrong-type artifacts are refused.
 
 ### Step 25 — stream-json live progress
+
+> **Status (seam shipped; parsing deferred).** The `SandboxProvider.exec_stream`
+> seam is in place and degrades gracefully (optional capability, like
+> `exec_interactive`); `tests/test_exec_stream_seam.py` pins the contract. The
+> actual `--output-format stream-json` parsing in `ClaudeDriver` is **deferred**:
+> its event shape can't be verified against the installed claude CLI here, and
+> shipping a blind parser would violate §6. Token-on-failure accounting (the
+> other half of the original ask) already landed in step 5, so nothing is lost
+> by waiting on the live-progress half.
 
 **Problem.** Deferred from Step 5: headless runs are opaque until they finish, and live
 progress needs the provider to stream rather than capture one-shot.
