@@ -93,6 +93,7 @@ class Controller:
         network_denied: bool = False,
         network: str = "egress",
         browser: bool = False,
+        pr_gate=None,
     ) -> None:
         self.config = config
         self.store = store
@@ -101,6 +102,9 @@ class Controller:
         self.network = network
         self.network_denied = network_denied
         self.browser = browser
+        # draft-PR gate (step 16); injectable for tests. Built lazily from
+        # config/env on first use when the gate mode calls for it.
+        self.pr_gate = pr_gate
 
     # -- the single-task loop (Phase 1) -----------------------------------
 
@@ -588,9 +592,11 @@ class Controller:
             task.repo_path, task.base_ref, branch, Path(task.patch_path),
             f"sandkeep: {task.instruction}\n\nTask: {task.id}",
         )
-        self.store.update_state(
-            task.id, TaskState.MERGED, new_trace_id(), f"applied to {branch} @ {sha}"
-        )
+        detail = f"applied to {branch} @ {sha}"
+        if self.config.gate == "draft-pr":
+            pr = self._open_draft_pr(task, branch)
+            detail += f"; draft PR {pr.url or f'#{pr.number}'}"
+        self.store.update_state(task.id, TaskState.MERGED, new_trace_id(), detail)
         # Phase 4: register the skills this task authored, scoped to the repo,
         # so future runs against it inherit the learned capabilities.
         authored = self.authored_skills(task)
@@ -602,6 +608,45 @@ class Controller:
             )
         self._destroy_quietly(task)
         return sha
+
+    def _open_draft_pr(self, task: Task, branch: str):
+        """Push the accepted branch and open a draft PR (step 16). Uses the
+        injected gate if present, else builds one from config/env. Raises
+        ControllerError (not a raw PRGateError) so the CLI reports it cleanly."""
+        from . import gate as gate_mod
+
+        gw = self.pr_gate
+        if gw is None:
+            gw = gate_mod.DraftPRGate(
+                remote=self.config.git_remote, base=self.config.pr_base,
+                token=os.environ.get("GITHUB_TOKEN", ""),
+            )
+        contract = {}
+        rp = self.config.outputs_dir / f"{task.id}.results.json"
+        if rp.exists():
+            try:
+                contract = json.loads(rp.read_text())
+            except (json.JSONDecodeError, OSError):
+                contract = {}
+        body = gate_mod.build_pr_body(
+            instruction=task.instruction,
+            summary=contract.get("summary", ""),
+            files=self._claimed_files(task),
+            risk_flags=self.risk_flags(task),
+            task_id=task.id,
+        )
+        try:
+            pr = gw.open(
+                repo_path=task.repo_path, branch=branch,
+                title=f"sandkeep: {task.instruction}"[:72], body=body,
+            )
+        except gate_mod.PRGateError as exc:
+            raise ControllerError(f"draft-PR gate failed: {exc}") from None
+        self.audit.log(
+            "draft_pr_opened", trace_id=new_trace_id(), task_id=task.id,
+            branch=branch, url=pr.url, number=pr.number,
+        )
+        return pr
 
     def reject(self, task_id: str) -> None:
         task = self.store.get_task(task_id)

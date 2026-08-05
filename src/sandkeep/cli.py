@@ -478,6 +478,8 @@ def _cmd_test(cfg: Config, args: argparse.Namespace) -> int:
 
 
 def _cmd_accept(cfg: Config, args: argparse.Namespace) -> int:
+    if getattr(args, "gate", None):
+        cfg.gate = args.gate  # flag overrides SANDKEEP_GATE for this accept
     # tests may need to fetch deps → egress; falls back fine if none configured
     controller = _make_controller(cfg, network="egress")
     task = controller.store.get_task(args.task_id)
@@ -498,6 +500,9 @@ def _cmd_accept(cfg: Config, args: argparse.Namespace) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 1
     print(f"applied to branch sandkeep-accepted/{task.id} @ {sha[:12]}")
+    if cfg.gate == "draft-pr":
+        last = controller.store.get_transitions(task.id)[-1]
+        print(f"  {last['detail']}")
     print("your working tree and current branch are untouched")
     return 0
 
@@ -654,6 +659,11 @@ def build_parser() -> argparse.ArgumentParser:
     accept.add_argument(
         "--no-test", action="store_true",
         help="skip the configured test gate for this accept")
+    accept.add_argument(
+        "--gate", choices=("local", "draft-pr"), default=None,
+        help="how to deliver the accepted change: 'local' (fresh host branch, "
+             "default) or 'draft-pr' (also push + open a draft PR; needs a "
+             "GitHub remote + GITHUB_TOKEN). Also SANDKEEP_GATE.")
 
     test = sub.add_parser("test", help="run the test gate in a task's sandbox (no merge)")
     test.add_argument("task_id")

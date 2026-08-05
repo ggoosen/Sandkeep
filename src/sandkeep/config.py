@@ -24,6 +24,7 @@ DEFAULT_EGRESS_ALLOWLIST = (
     "api.anthropic.com,pypi.org,files.pythonhosted.org,registry.npmjs.org"
 )
 DEFAULT_BROWSER_IMAGE = "sandkeep-browser:latest"
+GATE_MODES = ("local", "draft-pr")
 DEFAULT_BACKEND = "docker"  # "docker" (Phase 0–1 harness) | "e2b" (microVM, Phase 2)
 BACKENDS = ("docker", "e2b")
 DEFAULT_E2B_TEMPLATE = "sandkeep"
@@ -55,6 +56,11 @@ class Config:
     # ("" leaves Docker's built-in default), and an opt-in read-only rootfs.
     seccomp_profile: str = ""
     read_only_rootfs: bool = False
+    # Human gate (improvement plan, step 16): "local" applies to a fresh host
+    # branch; "draft-pr" also pushes that branch and opens a draft PR.
+    gate: str = "local"
+    git_remote: str = "origin"
+    pr_base: str = "main"
     backend: str = DEFAULT_BACKEND
     e2b_template: str = DEFAULT_E2B_TEMPLATE
     # Optional test-gated merge: a command run INSIDE the sandbox against the
@@ -87,6 +93,11 @@ class Config:
         if "SANDKEEP_READONLY_ROOTFS" in os.environ:
             cfg.read_only_rootfs = os.environ["SANDKEEP_READONLY_ROOTFS"].lower() in (
                 "1", "on", "true", "yes")
+        cfg.gate = os.environ.get("SANDKEEP_GATE", cfg.gate)
+        if cfg.gate not in GATE_MODES:
+            raise ValueError(f"SANDKEEP_GATE must be one of {GATE_MODES}, got {cfg.gate!r}")
+        cfg.git_remote = os.environ.get("SANDKEEP_GIT_REMOTE", cfg.git_remote)
+        cfg.pr_base = os.environ.get("SANDKEEP_PR_BASE", cfg.pr_base)
         cfg.backend = os.environ.get("SANDKEEP_BACKEND", cfg.backend)
         if cfg.backend not in BACKENDS:
             raise ValueError(

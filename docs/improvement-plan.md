@@ -562,6 +562,16 @@ committed key warns at run and audits it; `--full-history` restores deep history
 
 ### Step 16 — Draft-PR human gate
 
+> **Status (shipped, host-verified; live GitHub infra-bound).** `--gate draft-pr`
+> / `SANDKEEP_GATE`: on accept the branch is applied locally *and* pushed, then a
+> draft PR is opened (body from the contract + risk flags). `gate.py` isolates
+> the GitHub call behind injectable git+http seams — remote parsing, body
+> building, push+open, and the missing-token/remote failures are host-tested
+> (`tests/test_gate.py`); a Docker-backed accept drives it end-to-end with a fake
+> gateway (`test_controller.py`). The real push+API call needs a configured
+> remote + `GITHUB_TOKEN` and fails loud without them — that live path can't be
+> exercised here, by design.
+
 **Problem.** `accept` applies to a local branch — it doesn't push, open a PR, or trigger
 CI. This is the biggest workflow gap and the last un-built Phase-2 item.
 
