@@ -217,6 +217,47 @@ class StateStore:
                 detail=detail,
             )
 
+    def advance(
+        self, task_id: str, path: list[TaskState], trace_id: str, detail: str = ""
+    ) -> None:
+        """Apply several legal transitions as ONE sqlite transaction, so a
+        crash can't strand the task on an intermediate hop (e.g.
+        SUCCEEDED → REVIEW). Each hop is validated against ALLOWED_TRANSITIONS
+        and appended to the transitions table; the tasks row ends on the last
+        state. Raises IllegalTransition (rolling back the whole thing) if any
+        hop is not permitted."""
+        if not path:
+            return
+        with self._lock:
+            task = self.get_task(task_id)
+            state = task.state
+            now = _now()
+            rows = []
+            for nxt in path:
+                if nxt not in ALLOWED_TRANSITIONS[state]:
+                    raise IllegalTransition(
+                        f"{state.value} → {nxt.value} is not a legal transition"
+                    )
+                rows.append((uuid.uuid4().hex, task_id, state.value, nxt.value,
+                             trace_id, detail, now))
+                state = nxt
+            with self._conn:
+                self._conn.execute(
+                    "UPDATE tasks SET state = ?, updated_at = ? WHERE id = ?",
+                    (state.value, now, task_id),
+                )
+                self._conn.executemany(
+                    "INSERT INTO transitions (id, task_id, from_state, to_state,"
+                    " trace_id, detail, ts) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    rows,
+                )
+        if self._audit:
+            for _id, _t, frm, to, _tr, det, _ts in rows:
+                self._audit.log(
+                    "state_transition", trace_id=trace_id, task_id=task_id,
+                    from_state=frm, to_state=to, detail=det,
+                )
+
     def get_transitions(self, task_id: str) -> list[sqlite3.Row]:
         with self._lock:
             return self._conn.execute(

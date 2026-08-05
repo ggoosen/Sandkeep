@@ -26,14 +26,16 @@ from .config import (
     write_secret,
 )
 from .controller import Controller, ControllerError, run_concurrent
+from .diff import DiffError
 from .models import TaskState
+from .sandbox.base import SandboxError
 from .sandbox.docker_provider import (
     DockerConfig,
     DockerProvider,
     build_agent_image,
     build_image,
 )
-from .state_store import StateStore, TaskNotFound
+from .state_store import IllegalTransition, StateStore, TaskNotFound
 
 SECURITY_BANNER = (
     "⚠  sandkeep is alpha: the Docker backend is a mechanics harness, NOT a\n"
@@ -350,10 +352,15 @@ def _cmd_ps(cfg: Config, args: argparse.Namespace) -> int:
 def _cmd_gc(cfg: Config, args: argparse.Namespace) -> int:
     controller = _make_controller(cfg, network="none")
     try:
+        reconciled = controller.reconcile(dry_run=args.dry_run)
         reaped = controller.gc(include_review=args.include_review, dry_run=args.dry_run)
-    except NotImplementedError as exc:
+    except (NotImplementedError, SandboxError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
+    if reconciled:
+        verb = "would reconcile" if args.dry_run else "reconciled (→ rolled_back)"
+        for t in reconciled:
+            print(f"  {verb}  task {t.id}  (was {t.state.value}, sandbox gone)")
     if not reaped:
         print("nothing to reap" + ("" if args.include_review else
               " (use --include-review to also reap abandoned review sandboxes)"))
@@ -453,6 +460,10 @@ class _RemovedFlag(argparse.Action):
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="sandkeep")
+    parser.add_argument(
+        "--debug", action="store_true",
+        help="re-raise the full traceback on error instead of a one-line message",
+    )
     sub = parser.add_subparsers(dest="command", required=True)
 
     image = sub.add_parser("image", help="manage the sandbox image")
@@ -577,8 +588,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    cfg = Config.from_env()
+    debug = getattr(args, "debug", False)
     try:
+        cfg = Config.from_env()  # bad SANDKEEP_* → ValueError, handled below
         if args.command == "image":
             return _cmd_image_build(cfg, args)
         if args.command == "auth":
@@ -600,10 +612,17 @@ def main(argv: list[str] | None = None) -> int:
     except TaskNotFound as exc:
         print(f"error: no such task: {exc}", file=sys.stderr)
         return 1
-    except UnknownAgent as exc:
-        print(f"error: {exc}", file=sys.stderr)
-        return 1
-    except ControllerError as exc:
+    except KeyboardInterrupt:
+        print("\ninterrupted", file=sys.stderr)
+        return 130
+    except (
+        UnknownAgent, ControllerError, DiffError, IllegalTransition,
+        SandboxError, ValueError,
+    ) as exc:
+        # Every user-reachable failure prints a clean one-liner; --debug
+        # re-raises the traceback for maintainers.
+        if debug:
+            raise
         print(f"error: {exc}", file=sys.stderr)
         return 1
 

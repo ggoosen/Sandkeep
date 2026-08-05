@@ -146,6 +146,29 @@ class Controller:
         self._inject_repo_skills(handle, task)
 
         self.store.update_state(task.id, TaskState.RUNNING, new_trace_id(), "agent dispatched")
+        try:
+            return self._drive_run(task, handle, driver, started)
+        except BaseException as exc:  # noqa: BLE001 — crash recovery, then re-raise
+            # Any unexpected failure after RUNNING (a bug, KeyboardInterrupt, the
+            # daemon vanishing) must not strand the task at RUNNING with a live
+            # sandbox: fail it and tear the sandbox down, then re-raise so the
+            # CLI can report it.
+            self._fail_if_running(task, handle, f"run aborted: {exc!r}")
+            raise
+
+    def _fail_if_running(self, task: Task, handle: SandboxHandle | None, detail: str) -> None:
+        current = self.store.get_task(task.id).state
+        if current not in TERMINAL_STATES and current is not TaskState.REVIEW:
+            try:
+                self._fail(task, handle, detail)
+            except Exception:  # noqa: BLE001 — never mask the original error
+                pass
+
+    def _drive_run(
+        self, task: Task, handle: SandboxHandle, driver, started: float
+    ) -> Task:
+        """The post-RUNNING body of a headless run. Extracted so run_task can
+        wrap it in one crash-recovery guard."""
         if driver.produces_contract:
             agent_runner.install_system_prompt(
                 self.provider, handle,
@@ -243,23 +266,26 @@ class Controller:
         self.store.update_state(
             task.id, TaskState.RUNNING, new_trace_id(), "interactive session started"
         )
-        cmd = agent_runner.build_interactive_command(
-            task, seed=seed, skip_permissions=skip_permissions
-        )
-        exit_code = self.provider.exec_interactive(handle, cmd)
-        sandbox_seconds = time.monotonic() - started
-        self.audit.log(
-            "interactive_session_ended",
-            trace_id=new_trace_id(), task_id=task.id, exit_code=exit_code,
-        )
-
-        # No agent contract for an interactive run; the diff is the truth.
-        self._land_from_diff(
-            task, handle,
-            summary=f"Interactive {driver.name} session.",
-            usage=(0, 0), sandbox_seconds=sandbox_seconds,
-            empty_detail="no changes made in the interactive session",
-        )
+        try:
+            cmd = agent_runner.build_interactive_command(
+                task, seed=seed, skip_permissions=skip_permissions
+            )
+            exit_code = self.provider.exec_interactive(handle, cmd)
+            sandbox_seconds = time.monotonic() - started
+            self.audit.log(
+                "interactive_session_ended",
+                trace_id=new_trace_id(), task_id=task.id, exit_code=exit_code,
+            )
+            # No agent contract for an interactive run; the diff is the truth.
+            self._land_from_diff(
+                task, handle,
+                summary=f"Interactive {driver.name} session.",
+                usage=(0, 0), sandbox_seconds=sandbox_seconds,
+                empty_detail="no changes made in the interactive session",
+            )
+        except BaseException as exc:  # noqa: BLE001 — incl. Ctrl-C in the TTY
+            self._fail_if_running(task, handle, f"interactive session aborted: {exc!r}")
+            raise
         return self.store.get_task(task.id)
 
     # -- shared helpers ----------------------------------------------------
@@ -373,9 +399,10 @@ class Controller:
                 names=[s.name for s in authored],
             )
 
-        self.store.update_state(task.id, TaskState.SUCCEEDED, new_trace_id(), summary)
-        self.store.update_state(
-            task.id, TaskState.REVIEW, new_trace_id(), "awaiting human gate"
+        # One transaction for SUCCEEDED → REVIEW so a crash can't strand the
+        # task on SUCCEEDED (from which no CLI command can recover it).
+        self.store.advance(
+            task.id, [TaskState.SUCCEEDED, TaskState.REVIEW], new_trace_id(), summary
         )
 
     # -- coordination & policy (Phase 3, read-only, host-side) ------------
@@ -531,11 +558,44 @@ class Controller:
                 infos.append(SandboxInfo(sid, task.id, task.state.value, "active"))
         return infos
 
+    def reconcile(self, *, dry_run: bool = False) -> list[Task]:
+        """Recover tasks a crashed controller left wedged: any non-terminal,
+        non-REVIEW task whose sandbox is gone (or never recorded) can never make
+        progress, so drive it FAILED → ROLLED_BACK. Returns the tasks that were
+        (or would be) reconciled. This is what unsticks a RUNNING/PROVISIONING/
+        SUCCEEDED row after the process that owned it died."""
+        try:
+            live = set(self.provider.list_sandbox_ids())
+        except (SandboxError, NotImplementedError):
+            live = set()
+        stuck: list[Task] = []
+        for task in self.store.list_tasks():
+            if task.state in TERMINAL_STATES or task.state is TaskState.REVIEW:
+                continue
+            if task.sandbox_id and task.sandbox_id in live:
+                continue  # sandbox still there — a run may genuinely be in flight
+            stuck.append(task)
+        if dry_run:
+            return stuck
+        for task in stuck:
+            trace = new_trace_id()
+            detail = "reconciled: controller gone, no live sandbox"
+            # RUNNING/PROVISIONING/SUCCEEDED all allow → FAILED → ROLLED_BACK
+            self.store.update_state(task.id, TaskState.FAILED, trace, detail)
+            self.store.update_state(task.id, TaskState.ROLLED_BACK, trace, detail)
+            self.audit.log(
+                "task_reconciled", trace_id=trace, task_id=task.id,
+                from_state=task.state.value, sandbox_id=task.sandbox_id,
+            )
+        return stuck
+
     def gc(self, *, include_review: bool = False, dry_run: bool = False) -> list[SandboxInfo]:
         """Reap sandboxes that shouldn't be alive: orphans (no task) and stale
         (task already terminal). With include_review, also reject + reap the
         intentional REVIEW rollback targets. Never touches 'active' sandboxes
-        (a run may be in flight). Returns what was (or would be) reaped."""
+        (a run may be in flight). Returns what was (or would be) reaped. Pair
+        with reconcile() to also recover crash-wedged task rows — `sandkeep gc`
+        runs both."""
         targets = [
             s for s in self.list_sandboxes()
             if s.reapable or (include_review and s.kind == "review")
