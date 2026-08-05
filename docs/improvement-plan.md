@@ -803,6 +803,16 @@ aggregate view of cost/throughput for a running fleet.
 
 ### Step 24 — Gated artifact return path
 
+> **Status (shipped).** Agents write to `.sandkeep/artifacts/` (already excluded
+> from the patch by the `.sandkeep` rule); `artifacts.py` reads them at land time
+> over a base64 channel (binary-safe), enforces a **content-type allowlist**
+> (images + text/report) and a **per-artifact size cap**, and surfaces them at
+> the gate — rejected files are shown *with a reason*, not silently dropped, so
+> nothing widens the return channel unnoticed. Accepted artifacts land in the
+> `outputs/<task>.artifacts/` sidecar; the diff is never touched. Host-tested in
+> `tests/test_artifacts.py`. Pairs naturally with the browser bridge
+> (screenshots now have a gated way back).
+
 **Problem.** The browser can screenshot and tasks can produce files, but the only things
 that cross the gate are the diff + contract — so a screenshot/report can't come back for
 review. (Deliberately deferred in Step 11: it *widens what leaves the sandbox*.)

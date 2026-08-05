@@ -236,6 +236,11 @@ def _print_policy(controller: Controller, task) -> None:
         print("\n  ✎ skills authored (registered for this repo on accept):")
         for s in authored:
             print(f"      {s.name} — {s.description}")
+    arts = controller.captured_artifacts(task)
+    if arts:
+        print("\n  📎 artifacts (excluded from the diff; in the outputs sidecar):")
+        for name in arts:
+            print(f"      {name}")
 
 
 # Friendly "that doesn't look right" hints per known key (not enforced).

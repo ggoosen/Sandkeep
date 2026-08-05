@@ -21,7 +21,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from . import agent_runner, diff, policy, results, skills
+from . import agent_runner, artifacts, diff, policy, results, skills
 from .agent import get_driver
 from .audit import AuditLog, new_trace_id
 from .config import Config, resource_path
@@ -551,6 +551,30 @@ class Controller:
                 names=[s.name for s in authored],
             )
 
+        # Step 24: capture agent-produced artifacts (screenshots, reports) —
+        # excluded from the patch, type/size-gated, surfaced at the gate.
+        try:
+            found = artifacts.read_artifacts(
+                self.provider, handle, timeout=self.config.exec_timeout_seconds,
+                max_bytes=self.config.max_artifact_bytes,
+            )
+        except Exception as exc:  # noqa: BLE001 — artifacts are best-effort metadata
+            found = []
+            self.audit.log(
+                "artifact_read_failed", trace_id=new_trace_id(), task_id=task.id,
+                error=str(exc),
+            )
+        if found:
+            accepted = artifacts.save_artifacts(
+                found, self.config.outputs_dir / f"{task.id}.artifacts"
+            )
+            self.audit.log(
+                "artifacts_captured", trace_id=new_trace_id(), task_id=task.id,
+                accepted=[a.name for a in accepted],
+                rejected=[{"name": a.name, "reason": a.skipped_reason}
+                          for a in found if a.skipped_reason],
+            )
+
         # One transaction for SUCCEEDED → REVIEW so a crash can't strand the
         # task on SUCCEEDED (from which no CLI command can recover it).
         self.store.advance(
@@ -626,6 +650,14 @@ class Controller:
             "skills_injected", trace_id=new_trace_id(), task_id=task.id,
             names=[s.name for s in stored],
         )
+
+    def captured_artifacts(self, task: Task) -> list[str]:
+        """Names of artifacts captured for a task (from the host sidecar), for
+        the gate to show. Empty if none."""
+        sidecar = self.config.outputs_dir / f"{task.id}.artifacts"
+        if not sidecar.is_dir():
+            return []
+        return sorted(p.name for p in sidecar.iterdir() if p.is_file())
 
     def authored_skills(self, task: Task) -> list[skills.Skill]:
         """Skills a task authored, from the host sidecar captured at land time

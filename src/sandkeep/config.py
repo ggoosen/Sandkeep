@@ -86,6 +86,8 @@ class Config:
     # run's actual spend is already ≤ its own --max-budget-usd.
     daily_budget_usd: float | None = None
     max_patch_bytes: int = DEFAULT_MAX_PATCH_BYTES
+    # Cap per agent-produced artifact (screenshots/reports, step 24).
+    max_artifact_bytes: int = 5 * 1024 * 1024
     task_timeout_seconds: int = DEFAULT_TASK_TIMEOUT_SECONDS
     exec_timeout_seconds: int = DEFAULT_EXEC_TIMEOUT_SECONDS
 
