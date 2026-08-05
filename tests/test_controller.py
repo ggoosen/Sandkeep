@@ -169,6 +169,25 @@ def test_violation_is_archived_never_silent(controller, store, host_repo, monkey
     assert not _container_exists(task.sandbox_id)
 
 
+def test_filesystem_marker_is_advisory_not_violation(
+    controller, store, host_repo, monkeypatch
+):
+    """A clean run whose transcript merely mentions '/src … permission denied'
+    must land at REVIEW with an advisory flag — NOT be archived as a VIOLATION
+    (improvement plan, step 5). Only ESCAPE markers stay hard violations."""
+    def work(task, provider, handle):
+        _do_work(task, provider, handle)
+        return _ok_result(
+            stdout="note: /src is read-only so writing there is permission denied"
+        )
+
+    _stub_agent(monkeypatch, work)
+    task = controller.run_task(str(host_repo), "add validation")
+    assert task.state is TaskState.REVIEW  # not ROLLED_BACK/VIOLATION
+    cats = [f.category for f in controller.risk_flags(task)]
+    assert any(c.startswith("output-scan/") for c in cats)
+
+
 def test_gate_rejects_wrong_state(controller, store, host_repo, monkeypatch):
     _stub_agent(monkeypatch, lambda t, p, h: _ok_result(exit_code=1, detail="x"))
     task = controller.run_task(str(host_repo), "add validation")

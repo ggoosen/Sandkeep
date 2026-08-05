@@ -1,0 +1,49 @@
+# CI (improvement plan, step 4).
+#
+# Two jobs, per docs/improvement-plan.md:
+#   unit     — the pure host-side suite on 3.12/3.13, with docker-backed
+#              tests deterministically excluded (SANDKEEP_TEST_FORCE_NO_DOCKER)
+#              so this job stays fast and its green means "host logic OK".
+#   boundary — the full suite INCLUDING the adversarial boundary tests
+#              against real containers, with --require-docker so a missing
+#              daemon or failed image build FAILS the job instead of
+#              silently skipping the security tests.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.12", "3.13"]
+    env:
+      SANDKEEP_TEST_FORCE_NO_DOCKER: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: python -m pip install -e ".[dev]"
+      - run: python -m pytest -q
+
+  boundary:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -e ".[dev]"
+      - name: Build sandbox image
+        run: docker build -t sandkeep-sandbox:latest sandbox_image
+      - name: Build egress-broker image (proxy mode)
+        run: docker build -t sandkeep-broker:latest sandbox_image/broker
+      - name: Build browser-bridge image
+        run: docker build -t sandkeep-browser:latest sandbox_image/browser
+      - name: Full suite with enforced containment verification
+        run: python -m pytest -q --require-docker

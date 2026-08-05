@@ -15,6 +15,37 @@ from sandkeep.state_store import StateStore
 
 IMAGE = "sandkeep-sandbox:latest"
 
+REQUIRE_DOCKER_HELP = (
+    "fail (instead of skip) docker-backed tests when the docker daemon is "
+    "unavailable — CI passes this so a green run can never silently omit "
+    "the boundary suite"
+)
+
+
+def pytest_addoption(parser: pytest.Parser) -> None:
+    parser.addoption("--require-docker", action="store_true", help=REQUIRE_DOCKER_HELP)
+
+
+def pytest_terminal_summary(terminalreporter, exitstatus, config) -> None:
+    """One honest line at the end of every session: did the docker-backed
+    tests (including the boundary suite) actually run, or were they skipped?"""
+    skipped = terminalreporter.stats.get("skipped", [])
+    docker_skips = sum(
+        1 for r in skipped if "docker daemon not available" in str(getattr(r, "longrepr", ""))
+    )
+    if docker_skips:
+        terminalreporter.write_line(
+            f"sandkeep: {docker_skips} docker-backed tests SKIPPED — "
+            "containment was NOT verified this run (pass --require-docker to enforce)",
+            yellow=True,
+        )
+    elif terminalreporter.stats.get("passed"):
+        terminalreporter.write_line(
+            "sandkeep: docker-backed tests ran (or were deselected); "
+            "no docker-availability skips this session",
+            green=True,
+        )
+
 
 @pytest.fixture
 def audit(tmp_path: Path) -> AuditLog:
@@ -41,6 +72,10 @@ def task() -> Task:
 
 
 def _docker_ready() -> bool:
+    if os.environ.get("SANDKEEP_TEST_FORCE_NO_DOCKER"):
+        # deterministic "no docker" for the --require-docker meta-test and
+        # for CI jobs that want the pure host-side suite
+        return False
     if shutil.which("docker") is None:
         return False
     return (
@@ -52,11 +87,17 @@ def _docker_ready() -> bool:
 
 
 @pytest.fixture(scope="session")
-def sandbox_image() -> str:
-    """Skip docker-backed tests when docker is unavailable; build the
-    sandbox image on first use if it is missing."""
+def sandbox_image(request: pytest.FixtureRequest) -> str:
+    """Skip docker-backed tests when docker is unavailable — or FAIL if the
+    session was started with --require-docker; build the sandbox image on
+    first use if it is missing."""
+    required = request.config.getoption("--require-docker")
     if not _docker_ready():
-        pytest.skip("docker daemon not available")
+        msg = "docker daemon not available"
+        if required:
+            pytest.fail(f"{msg} but --require-docker was given: the boundary "
+                        "suite cannot be verified", pytrace=False)
+        pytest.skip(msg)
     inspect = subprocess.run(
         ["docker", "image", "inspect", IMAGE], capture_output=True
     )
@@ -66,7 +107,10 @@ def sandbox_image() -> str:
             capture_output=True,
         )
         if build.returncode != 0:
-            pytest.skip(f"could not build {IMAGE}: {build.stderr.decode()[-500:]}")
+            detail = f"could not build {IMAGE}: {build.stderr.decode()[-500:]}"
+            if required:
+                pytest.fail(detail, pytrace=False)
+            pytest.skip(detail)
     return IMAGE
 
 
@@ -86,6 +130,52 @@ def provider(request):
     # default: Docker — only now do we require the docker image fixture
     image = request.getfixturevalue("sandbox_image")
     return DockerProvider(DockerConfig(image=image, network="none"))
+
+
+@pytest.fixture(scope="session")
+def broker_image(request: pytest.FixtureRequest) -> str:
+    """Build the egress-broker image for proxy-mode tests (improvement plan,
+    step 1). Same skip/fail contract as sandbox_image."""
+    required = request.config.getoption("--require-docker")
+    tag = "sandkeep-broker:latest"
+    if not _docker_ready():
+        msg = "docker daemon not available"
+        if required:
+            pytest.fail(msg, pytrace=False)
+        pytest.skip(msg)
+    ctx = Path(__file__).parents[1] / "sandbox_image" / "broker"
+    build = subprocess.run(
+        ["docker", "build", "-t", tag, str(ctx)], capture_output=True
+    )
+    if build.returncode != 0:
+        detail = f"could not build {tag}: {build.stderr.decode()[-500:]}"
+        if required:
+            pytest.fail(detail, pytrace=False)
+        pytest.skip(detail)
+    return tag
+
+
+@pytest.fixture(scope="session")
+def browser_image(request: pytest.FixtureRequest) -> str:
+    """Build the browser-bridge image for browser-bridge tests (improvement
+    plan, step 11). Same skip/fail contract as sandbox_image."""
+    required = request.config.getoption("--require-docker")
+    tag = "sandkeep-browser:latest"
+    if not _docker_ready():
+        msg = "docker daemon not available"
+        if required:
+            pytest.fail(msg, pytrace=False)
+        pytest.skip(msg)
+    ctx = Path(__file__).parents[1] / "sandbox_image" / "browser"
+    build = subprocess.run(
+        ["docker", "build", "-t", tag, str(ctx)], capture_output=True
+    )
+    if build.returncode != 0:
+        detail = f"could not build {tag}: {build.stderr.decode()[-500:]}"
+        if required:
+            pytest.fail(detail, pytrace=False)
+        pytest.skip(detail)
+    return tag
 
 
 def _git(repo: Path, *args: str) -> str:

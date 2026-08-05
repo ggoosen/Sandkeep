@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     model       TEXT NOT NULL,
     agent       TEXT NOT NULL DEFAULT 'claude',
     max_turns   INTEGER NOT NULL,
+    max_budget_usd REAL NOT NULL DEFAULT 5.0,
     sandbox_id  TEXT NOT NULL DEFAULT '',
     patch_path  TEXT NOT NULL DEFAULT '',
     created_at  TEXT NOT NULL,
@@ -92,6 +93,11 @@ class StateStore:
                 self._conn.execute(
                     "ALTER TABLE tasks ADD COLUMN agent TEXT NOT NULL DEFAULT 'claude'"
                 )
+        if "max_budget_usd" not in cols:  # improvement plan, step 9
+            with self._conn:
+                self._conn.execute(
+                    "ALTER TABLE tasks ADD COLUMN max_budget_usd REAL NOT NULL DEFAULT 5.0"
+                )
 
     def close(self) -> None:
         self._conn.close()
@@ -104,8 +110,9 @@ class StateStore:
             with self._conn:
                 self._conn.execute(
                     "INSERT INTO tasks (id, repo_path, instruction, base_ref, branch,"
-                    " state, model, agent, max_turns, sandbox_id, patch_path, created_at, updated_at)"
-                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    " state, model, agent, max_turns, max_budget_usd, sandbox_id,"
+                    " patch_path, created_at, updated_at)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         task.id,
                         task.repo_path,
@@ -115,7 +122,11 @@ class StateStore:
                         task.state.value,
                         task.model,
                         task.agent,
-                        task.max_turns,
+                        # max_turns is vestigial: the upstream claude CLI
+                        # removed the flag. The column stays (old DBs declare
+                        # it NOT NULL) but nothing reads it anymore.
+                        8,
+                        task.max_budget_usd,
                         task.sandbox_id,
                         task.patch_path,
                         now,
@@ -143,7 +154,7 @@ class StateStore:
             state=TaskState(row["state"]),
             model=row["model"],
             agent=row["agent"],
-            max_turns=row["max_turns"],
+            max_budget_usd=row["max_budget_usd"],
             sandbox_id=row["sandbox_id"],
             patch_path=row["patch_path"],
         )
@@ -205,6 +216,47 @@ class StateStore:
                 to_state=new_state.value,
                 detail=detail,
             )
+
+    def advance(
+        self, task_id: str, path: list[TaskState], trace_id: str, detail: str = ""
+    ) -> None:
+        """Apply several legal transitions as ONE sqlite transaction, so a
+        crash can't strand the task on an intermediate hop (e.g.
+        SUCCEEDED → REVIEW). Each hop is validated against ALLOWED_TRANSITIONS
+        and appended to the transitions table; the tasks row ends on the last
+        state. Raises IllegalTransition (rolling back the whole thing) if any
+        hop is not permitted."""
+        if not path:
+            return
+        with self._lock:
+            task = self.get_task(task_id)
+            state = task.state
+            now = _now()
+            rows = []
+            for nxt in path:
+                if nxt not in ALLOWED_TRANSITIONS[state]:
+                    raise IllegalTransition(
+                        f"{state.value} → {nxt.value} is not a legal transition"
+                    )
+                rows.append((uuid.uuid4().hex, task_id, state.value, nxt.value,
+                             trace_id, detail, now))
+                state = nxt
+            with self._conn:
+                self._conn.execute(
+                    "UPDATE tasks SET state = ?, updated_at = ? WHERE id = ?",
+                    (state.value, now, task_id),
+                )
+                self._conn.executemany(
+                    "INSERT INTO transitions (id, task_id, from_state, to_state,"
+                    " trace_id, detail, ts) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    rows,
+                )
+        if self._audit:
+            for _id, _t, frm, to, _tr, det, _ts in rows:
+                self._audit.log(
+                    "state_transition", trace_id=trace_id, task_id=task_id,
+                    from_state=frm, to_state=to, detail=det,
+                )
 
     def get_transitions(self, task_id: str) -> list[sqlite3.Row]:
         with self._lock:

@@ -57,6 +57,11 @@ class AgentDriver(ABC):
     #: True if the agent writes a results contract (.sandkeep/results.json);
     #: False means the diff is the source of truth (host-side synthesis).
     produces_contract: bool
+    #: env var the agent CLI honours to redirect its API base URL. In proxy
+    #: mode the controller points this at the broker (which injects the key) so
+    #: the sandbox never holds the credential. "" = no reverse-proxy support
+    #: (the agent still gets HTTPS_PROXY for allowlisted egress).
+    base_url_env: str = ""
 
     @abstractmethod
     def install_steps(self) -> list[str]:

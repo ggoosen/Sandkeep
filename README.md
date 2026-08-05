@@ -91,6 +91,7 @@ Useful flags on `run`/`shell`:
 |---|---|
 | `--agent <name>` | pick which agent runs in the sandbox (default `claude`; also `SANDKEEP_AGENT`) |
 | `--no-network` | run with **no network at all** (agent can't reach its API; for boundary testing / offline agents; also `SANDKEEP_NETWORK=none`) |
+| `--browser` | attach a headless-Chromium sidecar the agent drives over CDP (`$SANDKEEP_BROWSER_CDP`) — a browser capability without giving the sandbox one; page loads obey the egress policy. Build it with `image build --with-browser`. Also `SANDKEEP_BROWSER` |
 | `--no-skip-permissions` | (`shell`) restore Claude Code permission prompts |
 | `--model <id>` | override the task-tier model |
 
@@ -145,7 +146,7 @@ It's advisory — the human still decides. Nothing auto-blocks, nothing auto-mer
 
 ## Pluggable agents
 
-The boundary is **agent-agnostic** — containment comes from the sandbox, not from which agent runs inside it. Agents live behind a single `AgentDriver` interface (`claude` is the built-in default), selectable with `--agent` / `SANDKEEP_AGENT`. Adding another CLI agent (e.g. Codex) is a small, contained change: register a driver and teach the image to install its CLI. An unknown agent fails loud on the host before any sandbox is created.
+The boundary is **agent-agnostic** — containment comes from the sandbox, not from which agent runs inside it. Agents live behind a single `AgentDriver` interface, selectable with `--agent` / `SANDKEEP_AGENT`. Two ship today: **`claude`** (the default, writes a results contract) and **`codex`** (the OpenAI Codex CLI, a `produces_contract=False` driver that lands via host-side diff synthesis) — proof the seam works, not just an assertion. Adding another CLI agent is a small, contained change: register a driver and teach the image to install its CLI. An unknown agent fails loud on the host before any sandbox is created, and the unmodified boundary suite passes whichever agent is selected. *(Codex CLI flags should be re-verified with `codex --help` against the installed version, per the same discipline as the Claude driver.)*
 
 ## Capability authoring (per-repo skills)
 
@@ -171,7 +172,8 @@ proxy / secret broker slot in — is
 ## Requirements
 
 - Python 3.12+
-- Docker (for the current sandbox backend)
+- Docker (for the default sandbox backend) — or an E2B API key to use the
+  microVM backend instead (`SANDKEEP_BACKEND=e2b`)
 - An Anthropic API key (`ANTHROPIC_API_KEY`)
 
 ## Platform support
@@ -182,7 +184,7 @@ container, so the host only needs Python, git, and a Docker daemon:
 | Platform | Status |
 |---|---|
 | **macOS** (Intel & Apple Silicon) | ✅ **Tested** — full suite, incl. the boundary tests, runs green |
-| **Linux** | ✅ Expected to work (native Docker; CI target) |
+| **Linux** | ✅ Expected to work (native Docker) |
 | **Windows — WSL2** | ✅ Recommended path on Windows; effectively the Linux case |
 | **Windows — native** (PowerShell + Docker Desktop) | ⚠️ Untested. Likely works; known risk spots: drive-letter volume-mount syntax, TTY behaviour of `sandkeep shell`, and CRLF (`core.autocrlf`) rejecting sandbox-generated patches on `accept`. Issues welcome. |
 
@@ -195,7 +197,7 @@ the Docker dependency.
 
 - [x] Phase 0 — boundary proof (Docker mechanics)
 - [x] Phase 1 — single governed task loop (`run` + interactive `shell`, human gate)
-- [~] Phase 2 — real isolation + parallelism. **Done:** network-off toggle (`--no-network`), **concurrency** (`batch`), and an **E2B microVM backend with containment verified** (9/9 boundary tests). **Pending infra:** egress-allowlist proxy, secret broker, draft-PR gate, warm pool (need cloud/GitHub; deliberately not stubbed)
+- [~] Phase 2 — real isolation + parallelism. **Done:** network-off toggle (`--no-network`), **concurrency** (`batch`), an **E2B microVM backend with containment verified** (9 of the 11 boundary tests pass — all 9 isolation checks; the 2 remaining are tool-presence in the custom template, not containment gaps), and a **local key-broker + egress-allowlist** (`SANDKEEP_NETWORK=proxy`) so the agent never holds the API key and can only reach an allowlist — no cloud needed. **Pending:** E2B proxy parity, draft-PR gate, warm pool
 - [x] Phase 3 — diff risk analysis, cross-task conflict detection, **test-gated merge**
 - [x] Phase 4 — per-repo skill authoring
 - [x] Phase 5 — pluggable agents (`--agent`, `AgentDriver` seam, per-agent images)

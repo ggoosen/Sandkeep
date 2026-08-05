@@ -1,7 +1,7 @@
-# Sandkeep — Build Specification (Phases 0–1)
+# Sandkeep — Build Specification
 
 **Audience:** Claude Code (and the human reviewing its work).
-**Scope of this spec:** Phase 0 (prove the boundary) and Phase 1 (single-task governed loop) in build detail. Phases 2–4 are roadmap stubs at the end — **do not build them yet.**
+**Scope of this spec:** Phase 0 (prove the boundary) and Phase 1 (single-task governed loop) in build detail (§0–§11); §13–§16 spec the later phases, most of which are now implemented — each section carries its own status line. Current work is tracked in `docs/improvement-plan.md`.
 **Companion:** `CLAUDE.md` (operating brief, golden rules). Read it first.
 **Source of truth for the design rationale:** the Sandkeep v2 design doc. This spec is the *buildable subset*.
 
@@ -38,16 +38,22 @@ sandkeep/
     state_store.py         # SQLite: tasks, transitions, ledger
     audit.py               # JSON-line structured logging + trace ids
     controller.py          # Tier 0: the state machine
-    policy.py              # Tier 1: scope grant (minimal in P0/P1)
+    policy.py              # diff risk analysis + cross-task conflicts (§14)
     provisioner.py         # Tier 2: sandbox lifecycle
-    agent_runner.py        # builds + runs the headless claude command
+    agent_runner.py        # agent-neutral dispatch to AgentDriver (§13)
     diff.py                # extract / validate / apply patches
     results.py             # parse + validate the results contract
     violations.py          # violation detection + classification
+    skills.py              # per-repo capability authoring (§15)
+    agent/
+      __init__.py          # driver registry (get_driver)
+      base.py              # AgentDriver ABC (§13)
+      claude.py            # the built-in claude driver
     sandbox/
       __init__.py
       base.py              # SandboxProvider ABC
-      docker_provider.py   # Phase 0 backend (the ONLY place docker is touched)
+      docker_provider.py   # default backend (the ONLY place docker is touched)
+      e2b_provider.py      # E2B microVM backend (§16, SANDKEEP_BACKEND=e2b)
   prompts/
     agent_system_prompt.md # appended to the agent's system prompt
   sandbox_image/
@@ -92,7 +98,7 @@ class Task:
     branch: str = ""                # task branch inside the sandbox
     state: TaskState = TaskState.NEW
     model: str = "claude-sonnet-4-6"  # task-tier model; verify current alias
-    max_turns: int = 8
+    max_budget_usd: float = 5.0       # per-run spend cap (--max-turns is gone upstream)
     allowed_tools: list[str] = field(default_factory=lambda: ["Read", "Edit", "Write", "Bash"])
     sandbox_id: str = ""
     patch_path: str = ""
@@ -212,11 +218,15 @@ Builds and runs the headless Claude Code command **inside** the sandbox. This is
 cd /work/repo && \
 claude -p "<instruction + contract-writing instructions>" \
   --output-format json \
-  --max-turns <task.max_turns> \
   --allowedTools "<comma-separated task.allowed_tools>" \
   --append-system-prompt-file /work/.sandkeep/agent_system_prompt.md \
+  --max-budget-usd <task.max_budget_usd> \
   --dangerously-skip-permissions
 ```
+
+> `--max-turns` was removed from the upstream claude CLI and is gone from
+> Sandkeep too; runs are bounded by the spend cap (`--max-budget-usd`,
+> configurable per run) and the controller's wall-clock timeout.
 
 Notes:
 - `--dangerously-skip-permissions` is acceptable here **because it runs inside the sandbox** (the docs explicitly note containers are the safe place for it). Never use it on the host.
@@ -363,9 +373,9 @@ diff), printing the same accept/reject instructions as `run`.
 
 ---
 
-## 12. Roadmap stubs — DO NOT BUILD YET
+## 12. Later-phase status (summary)
 
-Leave `TODO(phase-N)` markers; do not implement until the phase is started.
+Most of these are now built — see each phase's own section (§13–§16) for detail. What remains unbuilt keeps `TODO(phase-N)` markers; do not stub security features that can't actually be enforced.
 
 - **Phase 2 — Real isolation + parallelism:** microVM `SandboxProvider` (E2B / Firecracker / Docker Sandboxes); snapshot/restore; concurrency + warm pool; secret-injecting broker (agent never holds the key); proper brokering egress proxy; draft-PR human gate. Status in §16. **Done:** network toggle, concurrency, and an E2B microVM with **containment verified**. **Remaining:** egress allowlist proxy, secret broker, draft-PR gate, warm pool (infra-bound) — see §16.
 - **Phase 3 — Coordination & policy:** cross-task conflict detection; test-gated merge queue; diff risk analysis (flag workflow/deploy/auth/secret/dep changes); richer `policy.py`. Full status in §14. **All implemented** (risk analysis, conflict detection, test-gated merge).
@@ -376,7 +386,7 @@ Leave `TODO(phase-N)` markers; do not implement until the phase is started.
 
 ## 13. Pluggable agent drivers (Phase 5 — core implemented)
 
-> **Status.** Core seam built and tested (`src/sandkeep/agent/`, `tests/test_agent_driver.py`); default Claude path byte-identical behind the interface. **Per-agent image templating** is now implemented (`render_dockerfile`/`build_agent_image`; `image build --agent <name>` renders from `driver.install_steps()`; runs select `cfg.image_for(agent)`). **Per-agent secret storage** is covered by the multi-key `sandkeep auth set <NAME>` CLI. **Remaining:** shipping a real second driver (Codex/Aider) — needs its CLI flags verified at build time against the actual tool, same discipline as §6.
+> **Status.** Core seam built and tested (`src/sandkeep/agent/`, `tests/test_agent_driver.py`); default Claude path byte-identical behind the interface. **Per-agent image templating** is implemented (`render_dockerfile`/`build_agent_image`; `image build --agent <name>` renders from `driver.install_steps()`; runs select `cfg.image_for(agent)`). **Per-agent secret storage** is covered by the multi-key `sandkeep auth set <NAME>` CLI. **A real second driver ships:** `CodexDriver` (`agent/codex.py`, `tests/test_codex_driver.py`) — a `produces_contract=False` driver that lands via host-side diff synthesis, proving the seam. Its CLI flags target the documented `codex exec` headless mode and should be re-verified with `codex --help` at build time (same §6 discipline). Remaining: proxy-mode reverse-proxy support for non-Anthropic drivers.
 
 The boundary is **agent-agnostic**: containment comes from the sandbox, not from which agent runs inside it (the boundary suite, §9–§10, proves this without reference to Claude). So any file-editing CLI agent can run in the box and inherit the same guarantees. Phase 5 makes that explicit.
 
@@ -411,7 +421,7 @@ class AgentDriver(ABC):
 
 ### Decisions (resolved)
 
-1. **Image — per-agent images.** `sandkeep image build --agent <name>` renders the Dockerfile with the driver's `install_steps()`, tagged `sandkeep-img:<name>`; the provider launches the image matching the task's agent. *(Rejected: one fat image with every CLI — ships unused binaries and enlarges the in-box attack surface.)*
+1. **Image — per-agent images.** `sandkeep image build --agent <name>` renders the Dockerfile with the driver's `install_steps()`, tagged `sandkeep-sandbox:<name>` (`config.image_for`); the provider launches the image matching the task's agent. *(Rejected: one fat image with every CLI — ships unused binaries and enlarges the in-box attack surface.)*
 2. **Secret — driver-declared env var.** The controller forwards only the driver's `secret_env` into the sandbox. First cut: forward it from the host shell if set. Follow-up: `sandkeep auth set --agent <name>` stores per-agent keys (multi-key store). The Phase 0–1 `TODO(phase-2)` secret-broker note applies to every driver.
 3. **Contract — diff-only fallback.** When `produces_contract=False`, the headless `run` path uses the **same host-side diff-synthesis the interactive `shell` path already uses** (§10b). This removes the Claude-specific `results.json` dependency for other agents and simplifies the runner.
 
@@ -494,17 +504,25 @@ The Docker provider already supports `--network none`; Phase 2 exposes it. `netw
 
 `SANDKEEP_BACKEND=e2b` runs each task in an E2B Firecracker microVM (`e2b_provider.py`). The adversarial boundary suite passes **9/9 isolation checks** against a real microVM (`SANDKEEP_TEST_BACKEND=e2b pytest tests/test_boundary.py`); `allow_internet_access=False` gives a true no-network posture, and `/src` is built as root / read-only with a non-root agent. The 2 remaining suite reds are tool-presence (the custom template needs an E2B access token to build), not containment gaps. See docs/phase-2-implementation.md → "Verifying the E2B backend".
 
+### Implemented: local key broker + egress allowlist (`SANDKEEP_NETWORK=proxy`)
+
+The "brokering egress allowlist proxy" and "secret-injecting broker" rows below turned out **not** to need cloud infra — both are buildable locally with Docker `--internal` networks and the agent CLI's `ANTHROPIC_BASE_URL`. `SANDKEEP_NETWORK=proxy` runs the sandbox on a fresh `--internal` (no-egress) network behind a stdlib broker sidecar (`sandbox_image/broker/broker.py`). The broker holds the API key and straddles that internal network plus the default bridge; the sandbox reaches it at `http://broker:8080`, points its base URL at `…/broker/anthropic` (the broker injects the key), and routes other egress through the broker's CONNECT allowlist. So **the agent never holds the key and can only reach the allowlist** — real enforcement, not a config flag. Broker decision logic + reverse-proxy round-trip are host-tested (`tests/test_broker.py`); the env split + provider wiring in `tests/test_proxy_mode.py`; the Docker-backed containment proof (no key in the sandbox, disallowed egress refused) in `tests/test_proxy_boundary.py`, run in CI.
+
+### Implemented: browser bridge (`--browser`, improvement plan step 11)
+
+`--browser` (or `SANDKEEP_BROWSER=on`) attaches a headless-Chromium sidecar (`sandbox_image/browser/`) to the task network, exposing **only** a Chrome DevTools Protocol endpoint the agent drives over CDP — it launches no browser of its own. The controller injects `SANDKEEP_BROWSER_CDP=http://browser:9222`; the agent connects with Playwright/Puppeteer `connectOverCDP`. It reuses the proxy-mode network plumbing: in `proxy` mode the browser sits on the same `--internal` network and routes its own page fetches through the broker allowlist (`HTTP(S)_PROXY`), so browsing obeys the same policy — and is logged with — the agent's API calls; in `egress` mode it gets a user-defined network with normal egress. The sidecar is non-root, `--cap-drop ALL`, mounts nothing, and is torn down with the task, so nothing new crosses the return channel — a *capability*, not a hole. `--no-network` and the E2B backend refuse it (fail loud); Docker only for now. Wiring host-tested in `tests/test_browser_bridge.py`; Docker-backed CDP-reachability + teardown in `tests/test_browser_boundary.py` (CI). Screenshot/artifact return path is deliberately **not** built — it would widen what leaves the sandbox and must be gated separately.
+
 ### Deferred — needs infrastructure, NOT stubbed (and why)
 
-| Piece | Why it can't be built/tested here | Why no stub |
-|---|---|---|
-| **microVM `SandboxProvider`** (E2B) | ✅ **shipped + containment verified** — boundary suite 9/9 on a real E2B microVM. 2 remaining reds are tool-presence (claude/curl in a custom template, needs an E2B *access token* to build), not leaks | n/a — real, verified code |
-| **brokering egress *allowlist* proxy** | needs a real proxy enforcing per-host rules (E2B's `SandboxNetworkOpts` may make this cheaper than a separate proxy — worth investigating) | an unenforced allowlist config reads as "exfil is blocked" when it isn't |
-| **secret-injecting broker** (agent never holds the key) | needs the proxy to inject creds out-of-band | a config flag can't stop the agent seeing an env var; pretending it does is false security |
-| **draft-PR human gate** | needs a GitHub remote + auth | nothing to test against locally |
-| **warm pool / snapshot-restore** | Docker mounts the repo at create() so a pre-provisioned pool can't hold it; fits E2B's upload model | premature without the microVM as the default backend |
+| Piece | Status |
+|---|---|
+| **microVM `SandboxProvider`** (E2B) | ✅ shipped + containment verified — boundary suite 9/11 on a real E2B microVM (all 9 isolation checks; 2 reds are tool-presence, not leaks) |
+| **browser bridge on E2B** | ⏳ Docker shipped (`--browser`); E2B needs a sidecar reachable from the microVM (same shape as the broker's E2B follow-up) |
+| **egress *allowlist* proxy + secret-injecting broker** | ✅ shipped for Docker (`SANDKEEP_NETWORK=proxy`) — the agent never holds the key and can only reach the allowlist. E2B parity via `SandboxNetworkOpts` is the remaining piece |
+| **draft-PR human gate** | ⏳ needs a GitHub remote + auth; nothing to test against locally |
+| **warm pool / snapshot-restore** | ⏳ fits E2B's upload model; premature without the microVM as the default backend |
 
-Each remains marked `TODO(phase-2)` in code. The `SandboxProvider` ABC (§4) is the seam: a microVM backend drops in there and **must pass the unmodified boundary suite** (§9–§10) — that contract is what makes the deferral safe.
+The two remaining rows keep `TODO(phase-2)` markers in code. The `SandboxProvider` ABC (§4) is the seam: a microVM backend drops in there and **must pass the unmodified boundary suite** (§9–§10) — that contract is what makes the deferral safe.
 
 ### Acceptance (`test_network.py`)
 

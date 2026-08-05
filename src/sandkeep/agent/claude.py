@@ -63,6 +63,7 @@ class ClaudeDriver(AgentDriver):
     name = "claude"
     secret_env = "ANTHROPIC_API_KEY"
     produces_contract = True
+    base_url_env = "ANTHROPIC_BASE_URL"
 
     def install_steps(self) -> list[str]:
         # Kept in sync with sandbox_image/Dockerfile (asserted by a test).

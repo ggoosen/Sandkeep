@@ -58,7 +58,7 @@ removed); the README states the model and the commercial-contact email.
 ```
 PROJECT/
   README.md                  # §3 — the adoption-critical file
-  LICENSE                    # Apache-2.0, verbatim
+  LICENSE                    # PolyForm Noncommercial 1.0.0, verbatim (§1)
   NOTICE
   SECURITY.md                # §4 — threat model + disclosure
   CONTRIBUTING.md            # §6 — incl. the provider extension point
@@ -94,7 +94,7 @@ PROJECT/
 
 [![CI](https://github.com/USER/PROJECT/actions/workflows/ci.yml/badge.svg)](…)
 [![PyPI](https://img.shields.io/pypi/v/PROJECT.svg)](…)
-[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![License](https://img.shields.io/badge/license-PolyForm%20Noncommercial-blue.svg)](LICENSE)
 
 ## ⚠️ Security status — read before using
 
@@ -147,7 +147,7 @@ backend (microVM, remote sandbox service) is the main extension point — see
 
 ## License
 
-Apache-2.0.
+PolyForm Noncommercial 1.0.0 (source-available; commercial use requires a paid license — see §1).
 ````
 
 ---
@@ -220,7 +220,7 @@ you must publish something. Two ways:
 Rehearse against **TestPyPI** first (same flow, different host) before the real upload.
 
 ### `pyproject.toml` essentials
-- `[project]` with `name = "PROJECT"`, `requires-python = ">=3.12"`, a short description, `license = "Apache-2.0"`, classifiers (Development Status :: 3 - Alpha).
+- `[project]` with `name = "PROJECT"`, `requires-python = ">=3.12"`, a short description, `license = "LicenseRef-PolyForm-Noncommercial-1.0.0"` (§1), classifiers (Development Status :: 3 - Alpha).
 - `[project.scripts]` → `PROJECT = "PROJECT.cli:main"` (the CLI entrypoint).
 - Minimal deps (stdlib-first per BUILD_SPEC). Dev extras: `pytest`, `ruff`.
 
@@ -299,7 +299,7 @@ Also include: dev setup, `ruff` + `pytest` expectations, conventional-ish commit
 - [ ] **PyPI name `sandkeep` reserved** by uploading a placeholder (Path A) *or* a verified pending publisher plus a confirmed first publish (Path B). 2FA enabled on PyPI; recovery codes stored.
 - [ ] Trusted Publisher configured (repo + `release.yml` + `pypi` environment match the workflow).
 - [ ] Release flow rehearsed against TestPyPI.
-- [ ] `LICENSE` (Apache-2.0) + `NOTICE` present; SPDX headers added.
+- [ ] `LICENSE` (PolyForm Noncommercial 1.0.0) + `NOTICE` present; SPDX headers added.
 - [ ] README security callout present and accurate to the shipped backend.
 - [ ] SECURITY.md containment table matches reality; disclosure channel live.
 - [ ] Phase 0 boundary suite passes in CI on a clean runner.
