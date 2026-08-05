@@ -79,6 +79,12 @@ class Config:
     # max_turns is gone: the upstream claude CLI removed the flag (see
     # agent/claude.py). Runs are bounded by max_budget_usd + task timeout.
     max_budget_usd: float = DEFAULT_MAX_BUDGET_USD
+    # Fleet-level guard (improvement plan, step 18): a rolling 24h cap on the
+    # spend COMMITTED across runs (sum of per-run --max-budget-usd), so a
+    # runaway fleet can't rack up cost. None = no daily cap. Committed (not
+    # measured) bounds worst-case without needing a live price table — each
+    # run's actual spend is already ≤ its own --max-budget-usd.
+    daily_budget_usd: float | None = None
     max_patch_bytes: int = DEFAULT_MAX_PATCH_BYTES
     task_timeout_seconds: int = DEFAULT_TASK_TIMEOUT_SECONDS
     exec_timeout_seconds: int = DEFAULT_EXEC_TIMEOUT_SECONDS
@@ -144,6 +150,14 @@ class Config:
             cfg.task_timeout_seconds = int(os.environ["SANDKEEP_TASK_TIMEOUT"])
         if "SANDKEEP_MAX_PATCH_BYTES" in os.environ:
             cfg.max_patch_bytes = int(os.environ["SANDKEEP_MAX_PATCH_BYTES"])
+        if "SANDKEEP_DAILY_BUDGET_USD" in os.environ:
+            raw = os.environ["SANDKEEP_DAILY_BUDGET_USD"]
+            try:
+                cfg.daily_budget_usd = float(raw)
+            except ValueError:
+                raise ValueError(
+                    f"SANDKEEP_DAILY_BUDGET_USD must be a number, got {raw!r}"
+                ) from None
         return cfg
 
     @property

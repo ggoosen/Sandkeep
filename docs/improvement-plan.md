@@ -654,6 +654,15 @@ new sandbox; the transition chain shows the revision; reject/accept still work.
 
 ### Step 18 — Fleet-level budgets & quotas
 
+> **Status (shipped).** `--total-budget-usd` on `batch` stops dispatching new
+> tasks once the **committed** spend (sum of per-run `--max-budget-usd`) would
+> exceed the cap; in-flight tasks finish, the rest come back as a skip result.
+> `SANDKEEP_DAILY_BUDGET_USD` is a rolling 24h committed cap enforced
+> pre-provision in `run_task` (fails loud). Committed-spend accounting bounds
+> worst-case **without a live price table** — each run's actual spend is already
+> ≤ its own budget — so no fragile pricing map to maintain. Host-tested in
+> `tests/test_budgets.py`.
+
 **Problem.** `--max-budget-usd` bounds a single run; nothing caps total spend across a
 `batch` or over time, so a runaway fleet can rack up cost.
 

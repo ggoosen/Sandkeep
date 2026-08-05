@@ -57,6 +57,7 @@ def run_concurrent(
     specs: list[dict],
     *,
     max_workers: int = 4,
+    total_budget_usd: float | None = None,
 ) -> list:
     """Run many tasks in parallel (BUILD_SPEC §12), one sandbox each, on a
     shared Controller. Safe because the StateStore and AuditLog are
@@ -64,16 +65,36 @@ def run_concurrent(
     parallelism is the per-task sandboxes/agent runs, not the (microsecond) DB
     writes. ``specs`` are run_task kwargs.
 
+    With ``total_budget_usd`` set, tasks are dispatched in order only while the
+    COMMITTED spend (sum of per-run budgets) stays under the cap; the rest are
+    not dispatched and come back as a ControllerError so the caller can report
+    them (improvement plan, step 18). In-flight tasks always finish.
+
     Returns results in submission order: a Task on completion, or the raised
     Exception for a host-side failure (so one bad task can't sink the batch).
     """
     results: list = [None] * len(specs)
+    default_budget = controller.config.max_budget_usd
+
+    to_run: list[tuple[int, dict]] = []
+    committed = 0.0
+    for i, spec in enumerate(specs):
+        b = spec.get("max_budget_usd")
+        b = b if b is not None else default_budget
+        if total_budget_usd is not None and committed + b > total_budget_usd:
+            results[i] = ControllerError(
+                f"skipped: batch budget ${total_budget_usd:.2f} reached "
+                f"(${committed:.2f} already committed)"
+            )
+            continue
+        committed += b
+        to_run.append((i, spec))
 
     def worker(spec: dict):
         return controller.run_task(**spec)
 
     with ThreadPoolExecutor(max_workers=max(1, max_workers)) as pool:
-        futures = {pool.submit(worker, spec): i for i, spec in enumerate(specs)}
+        futures = {pool.submit(worker, spec): i for i, spec in to_run}
         for future, i in futures.items():
             try:
                 results[i] = future.result()
@@ -126,6 +147,10 @@ class Controller:
         # Resolve the driver BEFORE creating any state or sandbox: an unknown
         # agent is host-side misconfiguration and must fail loud (BUILD_SPEC §13).
         driver = get_driver(agent or self.config.agent)
+        this_budget = (
+            max_budget_usd if max_budget_usd is not None else self.config.max_budget_usd
+        )
+        self._enforce_daily_budget(this_budget)
         task = Task(
             id=uuid.uuid4().hex,
             repo_path=str(Path(repo_path).resolve()),
@@ -165,6 +190,23 @@ class Controller:
             # CLI can report it.
             self._fail_if_running(task, handle, f"run aborted: {exc!r}")
             raise
+
+    def _enforce_daily_budget(self, this_budget: float) -> None:
+        """Refuse a run that would push the last-24h committed spend over the
+        configured daily cap (step 18) — fail loud, before provisioning."""
+        cap = self.config.daily_budget_usd
+        if cap is None:
+            return
+        from datetime import datetime, timedelta, timezone
+
+        since = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+        committed = self.store.committed_budget_since(since)
+        if committed + this_budget > cap:
+            raise ControllerError(
+                f"daily budget ${cap:.2f} would be exceeded: ${committed:.2f} "
+                f"committed in the last 24h + ${this_budget:.2f} this run. "
+                "Raise SANDKEEP_DAILY_BUDGET_USD or wait for the window to roll."
+            )
 
     def _fail_if_running(self, task: Task, handle: SandboxHandle | None, detail: str) -> None:
         current = self.store.get_task(task.id).state

@@ -388,7 +388,8 @@ def _cmd_batch(cfg: Config, args: argparse.Namespace) -> int:
              max_budget_usd=args.max_budget_usd)
         for t in tasks
     ]
-    results = run_concurrent(controller, specs, max_workers=args.max_parallel)
+    results = run_concurrent(controller, specs, max_workers=args.max_parallel,
+                             total_budget_usd=args.total_budget_usd)
 
     print(f"{len(results)} task(s):")
     rc = 0
@@ -758,6 +759,9 @@ def build_parser() -> argparse.ArgumentParser:
                             "(default from SANDKEEP_MAX_BUDGET_USD or 5.00)")
     batch.add_argument("--max-parallel", type=int, default=4,
                        help="max tasks running at once (default: 4)")
+    batch.add_argument("--total-budget-usd", type=float, default=None,
+                       help="stop dispatching new tasks once the committed spend "
+                            "(sum of per-run budgets) would exceed this cap")
     batch.add_argument("--no-network", action="store_true",
                        help="run sandboxes with no network at all")
     _add_browser_flag(batch)

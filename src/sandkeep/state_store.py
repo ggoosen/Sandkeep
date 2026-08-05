@@ -281,6 +281,18 @@ class StateStore:
                 (task_id, model, input_tokens, output_tokens, sandbox_seconds, _now()),
             )
 
+    def committed_budget_since(self, since_iso: str) -> float:
+        """Sum of per-run budgets committed by tasks created at/after
+        `since_iso` — the fleet-budget accounting basis (step 18). Committed,
+        not measured: each run's actual spend is ≤ its own max_budget_usd."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT COALESCE(SUM(max_budget_usd), 0) AS s FROM tasks"
+                " WHERE created_at >= ?",
+                (since_iso,),
+            ).fetchone()
+        return float(row["s"])
+
     def get_ledger(self, task_id: str) -> list[sqlite3.Row]:
         with self._lock:
             return self._conn.execute(
