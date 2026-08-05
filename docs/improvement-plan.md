@@ -763,6 +763,15 @@ without holding their own key; the unmodified boundary suite passes with each se
 
 ### Step 22 — CI actually running + release automation
 
+> **Status (release workflow shipped; live CI run infra-bound).**
+> `.github/workflows/release.yml` builds sdist+wheel and publishes via PyPI
+> **Trusted Publisher** (OIDC, no long-lived token) on a version-tag push. The
+> package **builds cleanly** here (`python -m build` → sdist + wheel), and the
+> workflows are guarded by `tests/test_release_ci.py` (boundary suite enforced
+> in CI; release uses Trusted Publisher, no token). What can't be done from here
+> is *triggering* a real CI run — that needs a PR/tag push against the GitHub
+> repo (infra-bound). Opening that PR is the one manual step left.
+
 **Problem.** The CI workflow was added in round 1 but has never *run* (no PR triggered
 it), and the specced PyPI trusted-publisher release flow isn't built — so "enforced
 boundary suite" and the PyPI badge are aspirational.
