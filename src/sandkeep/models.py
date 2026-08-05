@@ -61,6 +61,7 @@ class Task:
     model: str = "claude-sonnet-4-6"  # task-tier model; alias verified 2026-06 (BUILD_SPEC §2)
     agent: str = "claude"  # which AgentDriver runs inside the sandbox (BUILD_SPEC §13)
     max_turns: int = 8
+    max_budget_usd: float = 5.0  # per-run spend cap handed to the agent CLI
     allowed_tools: list[str] = field(
         default_factory=lambda: ["Read", "Edit", "Write", "Bash"]
     )

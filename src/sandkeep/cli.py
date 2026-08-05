@@ -211,6 +211,7 @@ def _cmd_run(cfg: Config, args: argparse.Namespace) -> int:
         model=args.model,
         agent=driver.name,
         max_turns=args.max_turns,
+        max_budget_usd=args.max_budget_usd,
     )
     if task.state is TaskState.REVIEW:
         results_path = cfg.outputs_dir / f"{task.id}.results.json"
@@ -260,7 +261,8 @@ def _cmd_batch(cfg: Config, args: argparse.Namespace) -> int:
 
     controller = _make_controller(cfg, network=network, agent=driver.name)
     specs = [
-        dict(repo_path=args.repo, instruction=t, model=args.model, agent=driver.name)
+        dict(repo_path=args.repo, instruction=t, model=args.model, agent=driver.name,
+             max_budget_usd=args.max_budget_usd)
         for t in tasks
     ]
     results = run_concurrent(controller, specs, max_workers=args.max_parallel)
@@ -473,6 +475,9 @@ def build_parser() -> argparse.ArgumentParser:
              f"available: {', '.join(available_agents())})",
     )
     run.add_argument("--max-turns", type=int, default=None)
+    run.add_argument("--max-budget-usd", type=float, default=None,
+                     help="per-run spend cap handed to the agent CLI "
+                          "(default from SANDKEEP_MAX_BUDGET_USD or 5.00)")
     run.add_argument(
         "--no-network", action="store_true",
         help="run with no network at all (agent can't reach its API; for "
@@ -489,6 +494,9 @@ def build_parser() -> argparse.ArgumentParser:
     batch.add_argument("--model", default=None)
     batch.add_argument("--agent", default=None,
                        help=f"agent to run (default: {DEFAULT_AGENT})")
+    batch.add_argument("--max-budget-usd", type=float, default=None,
+                       help="per-run spend cap handed to the agent CLI "
+                            "(default from SANDKEEP_MAX_BUDGET_USD or 5.00)")
     batch.add_argument("--max-parallel", type=int, default=4,
                        help="max tasks running at once (default: 4)")
     batch.add_argument("--no-network", action="store_true",

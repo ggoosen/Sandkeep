@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     model       TEXT NOT NULL,
     agent       TEXT NOT NULL DEFAULT 'claude',
     max_turns   INTEGER NOT NULL,
+    max_budget_usd REAL NOT NULL DEFAULT 5.0,
     sandbox_id  TEXT NOT NULL DEFAULT '',
     patch_path  TEXT NOT NULL DEFAULT '',
     created_at  TEXT NOT NULL,
@@ -92,6 +93,11 @@ class StateStore:
                 self._conn.execute(
                     "ALTER TABLE tasks ADD COLUMN agent TEXT NOT NULL DEFAULT 'claude'"
                 )
+        if "max_budget_usd" not in cols:  # improvement plan, step 9
+            with self._conn:
+                self._conn.execute(
+                    "ALTER TABLE tasks ADD COLUMN max_budget_usd REAL NOT NULL DEFAULT 5.0"
+                )
 
     def close(self) -> None:
         self._conn.close()
@@ -104,8 +110,9 @@ class StateStore:
             with self._conn:
                 self._conn.execute(
                     "INSERT INTO tasks (id, repo_path, instruction, base_ref, branch,"
-                    " state, model, agent, max_turns, sandbox_id, patch_path, created_at, updated_at)"
-                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    " state, model, agent, max_turns, max_budget_usd, sandbox_id,"
+                    " patch_path, created_at, updated_at)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         task.id,
                         task.repo_path,
@@ -116,6 +123,7 @@ class StateStore:
                         task.model,
                         task.agent,
                         task.max_turns,
+                        task.max_budget_usd,
                         task.sandbox_id,
                         task.patch_path,
                         now,
@@ -144,6 +152,7 @@ class StateStore:
             model=row["model"],
             agent=row["agent"],
             max_turns=row["max_turns"],
+            max_budget_usd=row["max_budget_usd"],
             sandbox_id=row["sandbox_id"],
             patch_path=row["patch_path"],
         )

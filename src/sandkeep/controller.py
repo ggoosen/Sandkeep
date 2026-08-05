@@ -108,6 +108,7 @@ class Controller:
         model: str | None = None,
         agent: str | None = None,
         max_turns: int | None = None,
+        max_budget_usd: float | None = None,
         allowed_tools: list[str] | None = None,
     ) -> Task:
         """Run one governed task; returns the task in REVIEW on success or
@@ -125,6 +126,9 @@ class Controller:
             model=model or self.config.model,
             agent=driver.name,
             max_turns=max_turns or self.config.max_turns,
+            max_budget_usd=(
+                max_budget_usd if max_budget_usd is not None else self.config.max_budget_usd
+            ),
         )
         if allowed_tools:
             task.allowed_tools = allowed_tools
@@ -152,6 +156,7 @@ class Controller:
         run = agent_runner.run_agent(
             task, self.provider, handle, self.audit,
             trace_id=new_trace_id(), timeout=self.config.task_timeout_seconds,
+            max_budget_usd=f"{task.max_budget_usd:.2f}",
         )
         sandbox_seconds = time.monotonic() - started
 
