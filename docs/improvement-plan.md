@@ -20,12 +20,23 @@ step 5's `stream-json` sub-item is a documented deferral (see its status note).
 | **C — Boundary upgrade** | 1 | key broker + egress allowlist, built locally | ✅ done |
 | **D — Ecosystem** | 7 | a real second agent driver | ✅ done |
 | **E — Capability bridges** | 11 | browser (CDP) bridge — a capability without a hole | ✅ done |
+| **F — Containment by default** | 12, 13 | make the real boundary the default, not an opt-in | 📋 spec'd |
+| **G — Tighter egress & secret exposure** | 14, 15 | path/method egress policy; limit what the agent can read | 📋 spec'd |
+| **H — Workflow** | 16, 17, 18 | draft-PR gate; task iteration; fleet budgets | 📋 spec'd |
+| **I — Backend parity & performance** | 19, 20 | E2B feature parity; warm pool | 📋 spec'd |
+| **J — Ecosystem** | 21 | verify Codex + a third driver, broker-protected | 📋 spec'd |
+| **K — Operations & release** | 22, 23 | CI actually running; release automation; observability | 📋 spec'd |
+| **L — Deferred channels & coverage** | 24, 25, 26 | artifact return path; stream-json; test blind spots | 📋 spec'd |
 
-Milestone E is a **post-review follow-up** (from the SandVault comparison).
+Milestones A–E are **done** (round 1). Milestones F–L are **round 2** — the gaps that
+remain after round 1, specified below. Recommended order is roughly F → H(16) → I(19)
+first (the headline containment gap, the biggest workflow gap, and closing the
+verified-backend feature deficit); the rest slot in behind their dependencies.
 
-Dependencies: 4 first (everything after lands gated); 5 benefits from 3's error paths;
-1 supersedes part of 5's detection story; 7 last (touches image templating + runner,
-which 5 also touches).
+Dependencies (round 1): 4 first (everything after lands gated); 5 benefits from 3's error
+paths; 1 supersedes part of 5's detection story; 7 last.
+Dependencies (round 2): 13 needs 12 + 19 (a default boundary must have parity); 21 needs
+14 (broker generalized for non-Anthropic agents); 20 fits on top of 19; 24 builds on 11.
 
 ---
 
@@ -423,8 +434,332 @@ sandbox).
 
 ---
 
-## Out of scope (unchanged from BUILD_SPEC §16)
+# Round 2 — remaining gaps (post round-1 review)
 
-Draft-PR gate and warm pool remain deferred — they genuinely need a GitHub remote and
-a snapshot-capable backend respectively. The broker work above *removes* the other two
-rows ("egress allowlist proxy", "secret broker") from that table.
+> **Origin.** Gap analysis after round 1 (steps 1–11) shipped. Round 1 fixed the
+> review's findings; these are the structural gaps that remain. Same build-spec style,
+> same golden rules. Nothing here is stubbed as a false guarantee — where a piece needs
+> infrastructure, that is stated.
+
+## Milestone F — Containment by default
+
+The headline gap: Sandkeep's whole pitch is "run untrusted agents/code away from your
+machine," but the **default** backend is Docker, which the README itself says is not a
+security boundary. The verified-containment backend (E2B microVM) exists but is opt-in
+and feature-poor (no broker, no browser). Round 2's first job is to make the real
+boundary the default.
+
+### Step 12 — Harden the default Docker backend
+
+**Problem.** The Docker sandbox has `--cap-drop ALL` + `no-new-privileges` and nothing
+else: no seccomp/apparmor profile, writable rootfs, no user-namespace remap, and
+`extra_run_args` is spliced in unvalidated (an operator config could re-add a writable
+mount or `--privileged`). It's a mechanics harness, honestly labelled — but it can be
+materially hardened without changing the model.
+
+**Design.**
+- Ship a **restrictive seccomp profile** (`sandbox_image/seccomp.json`, derived from
+  Docker's default minus the exotic syscalls an editing agent never needs) and pass
+  `--security-opt seccomp=…`; same for an apparmor profile where available.
+- **Read-only rootfs** (`--read-only`) with a writable `--tmpfs /work` (and `/tmp`), so
+  the only writable state is the disposable workspace — matches "scripts own the
+  filesystem."
+- **User-namespace remap** (`--userns-remap` / rootless where the daemon supports it) so
+  in-container root ≠ host root.
+- **Validate `extra_run_args`**: reject `--privileged`, any `-v/--volume`/`--mount`, and
+  `--cap-add` on the host side, before `docker run` — the "one mount, ever" invariant
+  becomes enforced, not conventional.
+
+**Files.** `sandbox/docker_provider.py`, new `sandbox_image/seccomp.json`, `config.py`,
+`tests/test_docker_provider.py`, boundary-suite additions.
+
+**Acceptance.** The hardened flags are present at the call site (fake-runner); a
+`extra_run_args` containing a writable mount / `--privileged` is refused loud; the
+unmodified boundary suite still passes; a Docker-backed test confirms in-container root
+can't touch a host-root-owned path.
+
+### Step 13 — Make containment the default, with honest parity
+
+**Problem.** Even hardened, Docker isn't a microVM. The *default* posture should be the
+one the product's security claim depends on — today a user has to know to set
+`SANDKEEP_BACKEND=e2b`, and even then loses the broker and browser.
+
+**Design.**
+- A **`SANDKEEP_POSTURE`** notion (`hardened-docker` | `microvm`) that selects backend +
+  the strongest network default together, with the security banner reporting the *actual*
+  posture rather than a fixed warning. Default to `microvm` **once** E2B has broker +
+  browser parity (Step 19) — until then default stays `hardened-docker` and the banner
+  says so.
+- Make the microVM path a first-run experience: `sandkeep doctor` checks for the E2B key
+  + template and tells the user exactly what to do, so "the safe default" isn't a wall.
+- Gate the default flip on parity: a `posture=microvm` run must pass the **unmodified
+  boundary suite** on that backend, and the broker/browser features must work there.
+
+**Files.** `config.py`, `cli.py` (`doctor`, banner), `README.md`, `SECURITY.md`,
+`tests/`.
+
+**Acceptance.** The banner names the real posture; `doctor` reports readiness; the
+default flips to microVM only when Step 19 lands and the boundary suite is green on it.
+
+## Milestone G — Tighter egress & secret exposure
+
+### Step 14 — Path/method-scoped egress policy + generalize the broker
+
+**Problem.** The broker allowlists whole hosts. A compromised agent that must reach
+`api.anthropic.com` can still encode data into API calls or burn credits, and the reverse
+proxy is Anthropic-specific so non-Claude agents get no key-broker protection at all.
+
+**Design.**
+- Extend the allowlist to **host + path-prefix + method** rules (e.g. allow
+  `POST api.anthropic.com/v1/messages`, deny everything else on that host), enforced in
+  `broker.py`; keep whole-host rules as the coarse default.
+- **Generalize the reverse proxy**: a small per-driver upstream map (`/anthropic` →
+  `api.anthropic.com`, `/openai` → `api.openai.com`, …) so any driver with a
+  `base_url_env` gets the same "key held by broker, injected out-of-band" treatment. Wire
+  `AgentDriver.broker_route` so drivers declare their upstream.
+- **Rate/size caps** per rule (bound how much can leave per run) — a partial answer to
+  the "exfil via the allowed host" problem, logged as a VIOLATION when exceeded.
+
+**Files.** `sandbox_image/broker/broker.py`, `agent/base.py` + drivers,
+`controller._agent_env`, `config.py`, `tests/test_broker.py`.
+
+**Acceptance.** Path/method rules allow the intended call and deny a sibling path on the
+same host; a `codex` run in proxy mode reaches OpenAI through the broker without holding
+`OPENAI_API_KEY`; an over-cap egress is flagged.
+
+### Step 15 — Limit what the agent can read from the repo
+
+**Problem.** Read-only `/src` exposes the **entire** working tree *and full git history*,
+so any secret ever committed is readable by the untrusted agent. Nothing surfaces this.
+
+**Design.**
+- Provision from a **shallow, single-branch clone** by default (`--depth=1`), so deep
+  history (and secrets scrubbed from HEAD but alive in history) isn't handed over; a
+  `--full-history` opt-in for tasks that need it.
+- A host-side **pre-provision secret scan** of what `/src` would expose (reuse
+  `policy.py`'s secret patterns), surfaced as a warning at run time and audited — "this
+  repo contains N apparent secrets the agent will be able to read."
+- Document that read-only ≠ unreadable (SECURITY.md).
+
+**Files.** `provisioner.py`, `policy.py` (reuse), `cli.py`, `SECURITY.md`, `tests/`.
+
+**Acceptance.** Default provision is shallow (verified in the clone); a repo with a
+committed key warns at run and audits it; `--full-history` restores deep history.
+
+## Milestone H — Workflow
+
+### Step 16 — Draft-PR human gate
+
+**Problem.** `accept` applies to a local branch — it doesn't push, open a PR, or trigger
+CI. This is the biggest workflow gap and the last un-built Phase-2 item.
+
+**Design.**
+- A `gate="draft-pr"` mode (`--gate draft-pr` / `SANDKEEP_GATE`): on `accept`, push the
+  `sandkeep-accepted/<id>` branch to a configured remote and open a **draft** PR via the
+  GitHub MCP/API, body pre-filled from the results contract + risk flags + conflicts.
+- Keep local-apply as the default; draft-PR is additive and needs a remote + auth
+  (fail loud if absent, never silently fall back).
+- The PR is *draft* on purpose — the human still merges; Sandkeep never auto-merges.
+
+**Files.** new `gate.py` (or `controller.accept` branch), `config.py`, `cli.py`,
+`BUILD_SPEC.md`, `tests/` (mocked GitHub client).
+
+**Acceptance.** With a remote configured, `accept --gate draft-pr` pushes the branch and
+opens a draft PR with the contract summary + risk flags; without a remote it errors
+clearly; local-apply default is unchanged.
+
+### Step 17 — Task iteration / resume
+
+**Problem.** A task is one-shot. If a diff is close but not right, there's no "revise it"
+— you start fresh, losing the sandbox and context.
+
+**Design.**
+- `sandkeep revise <task_id> --task "<follow-up>"`: re-open the task's **still-alive
+  REVIEW sandbox** (it's kept as the rollback target already), dispatch the agent again
+  with the follow-up instruction against the existing clone, re-extract + re-validate the
+  diff, land back at REVIEW. A new `REVIEW → RUNNING` transition (audited) + a revision
+  counter on the task.
+- Bounded by the same budget/timeout; each revision is a ledger row.
+
+**Files.** `models.py` (transition), `controller.py`, `cli.py`, `state_store.py`,
+`tests/`.
+
+**Acceptance.** A REVIEW task revised with a follow-up produces an updated diff without a
+new sandbox; the transition chain shows the revision; reject/accept still work.
+
+### Step 18 — Fleet-level budgets & quotas
+
+**Problem.** `--max-budget-usd` bounds a single run; nothing caps total spend across a
+`batch` or over time, so a runaway fleet can rack up cost.
+
+**Design.**
+- A **batch budget** (`--total-budget-usd`) that stops dispatching new tasks once the
+  ledger sum for the batch crosses it; in-flight tasks finish.
+- A rolling **daily/however quota** in config, checked at run dispatch (host-side, from
+  the ledger), refusing to start a run that would exceed it.
+
+**Files.** `controller.run_concurrent`, `state_store` (ledger sums), `config.py`,
+`cli.py`, `tests/`.
+
+**Acceptance.** A batch stops dispatching at the total budget; a run refused by the daily
+quota fails loud pre-provision; both are audited.
+
+## Milestone I — Backend parity & performance
+
+### Step 19 — E2B feature parity (broker + browser)
+
+**Problem.** The one *verified* backend (E2B) has neither the key broker (Step 1) nor the
+browser bridge (Step 11) — so choosing real containment means losing the best features.
+This blocks Step 13 (microVM-by-default).
+
+**Design.**
+- **Egress allowlist on E2B** via its `SandboxNetworkOpts` (per-host rules) plus the same
+  `ANTHROPIC_BASE_URL`→broker indirection, with the broker reachable from the microVM
+  (E2B-hosted sidecar or the host broker exposed to the VM). Mirror the Docker semantics
+  behind the `SandboxProvider` seam.
+- **Browser bridge on E2B**: a CDP endpoint reachable from the microVM (same
+  `SANDKEEP_BROWSER_CDP` contract), however E2B best exposes a second process/host.
+- Both must pass the **unmodified** proxy/browser boundary tests with
+  `SANDKEEP_TEST_BACKEND=e2b`.
+
+**Files.** `sandbox/e2b_provider.py`, `tests/` (backend-parametrized), docs.
+
+**Acceptance.** `SANDKEEP_TEST_BACKEND=e2b` passes `test_proxy_boundary.py` and
+`test_browser_boundary.py`; the key is absent in the microVM; disallowed egress refused.
+
+### Step 20 — Warm pool / snapshot-restore
+
+**Problem.** Every run cold-starts a container/microVM + clone; provisioning latency is
+paid each task. Deferred since Phase 2.
+
+**Design.**
+- A **pool** of pre-provisioned sandboxes (backend-specific: Docker containers held warm;
+  E2B snapshots) checked out per task and returned/discarded, with checkout/return
+  audited. On E2B this maps onto snapshot/restore; on Docker, a small idle pool.
+- The read-only-mount-at-create constraint (Docker) means the pool holds *image-warm*
+  sandboxes and mounts the repo at checkout — documented trade-off.
+
+**Files.** `sandbox/*`, `controller.py`, `config.py` (pool size), `tests/`.
+
+**Acceptance.** A pooled run provisions materially faster than cold; checkout/return is
+audited; a returned sandbox never leaks task state into the next.
+
+## Milestone J — Ecosystem
+
+### Step 21 — Verify Codex + ship a third driver, all broker-protected
+
+**Problem.** The `codex` driver's flags are best-effort (not verified against the real
+CLI), and no third driver exists despite the seam being ready. With Step 14 done, any
+driver can run key-broker-protected.
+
+**Design.**
+- Verify `codex` flags against the installed CLI (the §6 discipline) and give it a
+  `broker_route` (Step 14) so proxy mode protects it.
+- Add a **third driver** (Gemini CLI — headless-capable), same treatment:
+  `install_steps`, `produces_contract=False`, `broker_route`, per-agent image.
+
+**Files.** `agent/codex.py`, new `agent/gemini.py`, registry, `tests/`.
+
+**Acceptance.** Codex + the new driver each run to REVIEW; both work in proxy mode
+without holding their own key; the unmodified boundary suite passes with each selected.
+
+## Milestone K — Operations & release
+
+### Step 22 — CI actually running + release automation
+
+**Problem.** The CI workflow was added in round 1 but has never *run* (no PR triggered
+it), and the specced PyPI trusted-publisher release flow isn't built — so "enforced
+boundary suite" and the PyPI badge are aspirational.
+
+**Design.**
+- Open a PR to trigger CI and fix whatever the first real run surfaces (the boundary +
+  proxy + browser jobs building real images on `ubuntu-latest`).
+- Add `.github/workflows/release.yml` (PyPI Trusted Publisher, `pypi` environment),
+  rehearsed against TestPyPI, per `docs/open-source-release.md`.
+
+**Files.** `.github/workflows/release.yml`, minor CI fixes, docs.
+
+**Acceptance.** CI is green on a real run (boundary suite executed, not skipped); a tagged
+release publishes to (Test)PyPI via the trusted publisher.
+
+### Step 23 — Observability
+
+**Problem.** The only visibility is the JSON audit log and text `ps`/`show`; there's no
+aggregate view of cost/throughput for a running fleet.
+
+**Design.**
+- `sandkeep stats` — aggregate ledger (cost per agent/model/day, task outcomes) from
+  SQLite, plus a `--watch` live `ps`.
+- Optional Prometheus-style metrics endpoint is **out of scope** (adds a server); keep it
+  to CLI reporting over the data already stored.
+
+**Files.** `cli.py`, `state_store` (aggregate queries), `tests/`.
+
+**Acceptance.** `stats` reports cost + outcomes from the ledger; `ps --watch` refreshes.
+
+## Milestone L — Deferred channels & coverage
+
+### Step 24 — Gated artifact return path
+
+**Problem.** The browser can screenshot and tasks can produce files, but the only things
+that cross the gate are the diff + contract — so a screenshot/report can't come back for
+review. (Deliberately deferred in Step 11: it *widens what leaves the sandbox*.)
+
+**Design.**
+- A declared, size-capped **artifacts channel**: the agent writes to
+  `.sandkeep/artifacts/`, which — like authored skills — is **excluded from the patch**,
+  pulled host-side at land, surfaced at the gate, and persisted to a sidecar. It becomes
+  durable only on `accept`. Same human-gated discipline as skills; nothing auto-lands.
+- Content-type allowlist (images, text, json) + per-artifact size cap; binary artifacts
+  flagged.
+
+**Files.** `diff.py` (exclusion), `controller.py` (capture at land), `cli.py` (`show`
+lists artifacts), `config.py`, `tests/`.
+
+**Acceptance.** An agent-produced screenshot is captured, shown at the gate, excluded
+from the diff, and persisted only on accept; oversize/wrong-type artifacts are refused.
+
+### Step 25 — stream-json live progress
+
+**Problem.** Deferred from Step 5: headless runs are opaque until they finish, and live
+progress needs the provider to stream rather than capture one-shot.
+
+**Design.**
+- An optional streaming `exec` on `SandboxProvider` (`exec_stream`) that yields output
+  incrementally; `ClaudeDriver` uses `--output-format stream-json`, parsed per-event for
+  live progress + incremental scanning. Verify the event shape against the real CLI
+  first (§6). Backends without streaming keep the one-shot path.
+
+**Files.** `sandbox/base.py` + providers, `agent/claude.py`, `agent_runner.py`, `tests/`.
+
+**Acceptance.** `run` prints live progress events; token accounting matches the one-shot
+path; the one-shot fallback still works.
+
+### Step 26 — Close the test blind spots
+
+**Problem.** From the round-1 test review, still open: the real interactive TTY flow is
+monkeypatched (never exercised), concurrency edges (concurrent accept of conflicting
+tasks, accept racing gc) are untested, and E2B containment isn't reproducible in-tree.
+
+**Design.**
+- A Docker-backed interactive-flow test driving a scripted `docker exec -it` (pexpect or
+  a fake TTY) end to end.
+- Concurrency edge tests: two REVIEW tasks touching the same file accepted in parallel;
+  `accept` racing `gc`/`reconcile`.
+- Make the E2B boundary run a documented, key-gated CI job (opt-in) so "verified" is
+  reproducible by anyone with a key.
+
+**Files.** `tests/test_interactive.py`, `tests/test_concurrency.py`, CI, docs.
+
+**Acceptance.** The interactive path is exercised without monkeypatching the exec; the
+concurrency edges pass; the E2B job is documented and runnable.
+
+---
+
+## Out of scope
+
+The genuinely infra-bound pieces are now **planned** above rather than deferred: the
+draft-PR gate (Step 16) needs a GitHub remote, the warm pool (Step 20) needs a
+snapshot-capable backend, E2B parity (Step 19) needs an E2B key — each step states its
+dependency and fails loud rather than faking the guarantee. Nothing remains silently
+stubbed.
