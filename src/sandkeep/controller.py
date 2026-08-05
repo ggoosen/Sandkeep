@@ -341,8 +341,10 @@ class Controller:
                 "http_proxy": self.BROKER_URL,
                 "https_proxy": self.BROKER_URL,
             }
-            if driver.base_url_env:
-                env[driver.base_url_env] = self.BROKER_URL + "/anthropic"
+            # Point the agent's base URL at this driver's broker route (step 14),
+            # so the broker injects the right key for the right upstream.
+            if driver.base_url_env and driver.broker_route:
+                env[driver.base_url_env] = self.BROKER_URL + driver.broker_route["prefix"]
         else:
             env = {}
             secret = os.environ.get(driver.secret_env, "")

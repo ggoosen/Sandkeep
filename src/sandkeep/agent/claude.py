@@ -64,6 +64,13 @@ class ClaudeDriver(AgentDriver):
     secret_env = "ANTHROPIC_API_KEY"
     produces_contract = True
     base_url_env = "ANTHROPIC_BASE_URL"
+    broker_route = {
+        "prefix": "/anthropic",
+        "upstream": "https://api.anthropic.com",
+        "auth_header": "x-api-key",
+        "auth_scheme": "",
+        "key_env": "ANTHROPIC_API_KEY",
+    }
 
     def install_steps(self) -> list[str]:
         # Kept in sync with sandbox_image/Dockerfile (asserted by a test).

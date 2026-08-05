@@ -72,12 +72,22 @@ def _make_provider(cfg: Config, *, network: str, agent: str = DEFAULT_AGENT,
 
         return E2BProvider(E2BConfig(template=cfg.e2b_template, network=network))
     # In proxy mode the DockerProvider stands up the key-broker sidecar; the
-    # key is handed to the BROKER config here, never to the sandbox env.
-    broker_key = load_secret(cfg, "ANTHROPIC_API_KEY") or "" if network == "proxy" else ""
+    # key(s) are handed to the BROKER config here, never to the sandbox env.
+    # The route + secret come from the selected driver so any agent — not just
+    # claude — runs key-broker-protected (step 14).
+    broker_routes = ""
+    broker_secrets: dict[str, str] = {}
+    if network == "proxy":
+        drv = get_driver(agent)
+        route = drv.broker_route
+        if route:
+            broker_routes = json.dumps([route])
+            key = load_secret(cfg, route["key_env"]) or ""
+            broker_secrets[route["key_env"]] = key
     return DockerProvider(DockerConfig(
         image=cfg.image_for(agent), network=network,
         broker_image=cfg.broker_image, egress_allowlist=cfg.egress_allowlist,
-        broker_api_key=broker_key,
+        broker_routes=broker_routes, broker_secrets=broker_secrets,
         browser=browser, browser_image=cfg.browser_image,
         seccomp_profile=cfg.seccomp_profile, read_only_rootfs=cfg.read_only_rootfs,
     ))

@@ -526,6 +526,19 @@ default flips to microVM only when Step 19 lands and the boundary suite is green
 
 ### Step 14 — Path/method-scoped egress policy + generalize the broker
 
+> **Status (shipped, host-verified).** The broker now serves **multiple routes**
+> (a JSON route list): each has its own upstream + auth header/scheme + key
+> (Anthropic `x-api-key`, OpenAI `Authorization: Bearer …`), read from the
+> broker's own env by `key_env`. Routes carry optional **method rules** (host +
+> method) and a **request-body size cap** logged as a `violation` when exceeded.
+> Drivers declare a `broker_route`; the controller points the agent's base URL at
+> that route's prefix and the provider hands the broker the route + key — so
+> `codex` (or any driver) runs key-broker-protected in proxy mode, not just
+> claude. Verified on localhost (`tests/test_broker.py`: Bearer injection, method
+> denial, size cap) and via the env split (`tests/test_proxy_mode.py`). Path
+> rules on CONNECT tunnels are intentionally host-only (TLS is opaque); finer
+> rules apply to the reverse-proxied API calls where the broker sees method+path.
+
 **Problem.** The broker allowlists whole hosts. A compromised agent that must reach
 `api.anthropic.com` can still encode data into API calls or burn credits, and the reverse
 proxy is Anthropic-specific so non-Claude agents get no key-broker protection at all.

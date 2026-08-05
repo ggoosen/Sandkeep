@@ -37,7 +37,18 @@ class CodexDriver(AgentDriver):
     name = "codex"
     secret_env = "OPENAI_API_KEY"
     produces_contract = False  # diff is the truth; contract synthesized host-side
-    base_url_env = ""  # proxy-mode reverse-proxy support is a follow-up
+    # Broker-routable in proxy mode (step 14): the broker injects the OpenAI key
+    # so the sandbox never holds it. The base-URL var + exact upstream path
+    # should be re-verified against the real Codex/OpenAI CLI at build time (§6);
+    # OPENAI_BASE_URL is the documented override for the OpenAI SDK.
+    base_url_env = "OPENAI_BASE_URL"
+    broker_route = {
+        "prefix": "/openai",
+        "upstream": "https://api.openai.com",
+        "auth_header": "Authorization",
+        "auth_scheme": "Bearer ",
+        "key_env": "OPENAI_API_KEY",
+    }
 
     def install_steps(self) -> list[str]:
         # Kept in sync with the codex per-agent image (asserted by a test).
