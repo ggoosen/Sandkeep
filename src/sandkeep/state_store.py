@@ -122,7 +122,10 @@ class StateStore:
                         task.state.value,
                         task.model,
                         task.agent,
-                        task.max_turns,
+                        # max_turns is vestigial: the upstream claude CLI
+                        # removed the flag. The column stays (old DBs declare
+                        # it NOT NULL) but nothing reads it anymore.
+                        8,
                         task.max_budget_usd,
                         task.sandbox_id,
                         task.patch_path,
@@ -151,7 +154,6 @@ class StateStore:
             state=TaskState(row["state"]),
             model=row["model"],
             agent=row["agent"],
-            max_turns=row["max_turns"],
             max_budget_usd=row["max_budget_usd"],
             sandbox_id=row["sandbox_id"],
             patch_path=row["patch_path"],

@@ -107,7 +107,6 @@ class Controller:
         *,
         model: str | None = None,
         agent: str | None = None,
-        max_turns: int | None = None,
         max_budget_usd: float | None = None,
         allowed_tools: list[str] | None = None,
     ) -> Task:
@@ -125,7 +124,6 @@ class Controller:
             instruction=instruction,
             model=model or self.config.model,
             agent=driver.name,
-            max_turns=max_turns or self.config.max_turns,
             max_budget_usd=(
                 max_budget_usd if max_budget_usd is not None else self.config.max_budget_usd
             ),

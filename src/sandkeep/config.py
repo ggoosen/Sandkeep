@@ -17,7 +17,6 @@ NETWORK_MODES = ("egress", "none")
 DEFAULT_BACKEND = "docker"  # "docker" (Phase 0–1 harness) | "e2b" (microVM, Phase 2)
 BACKENDS = ("docker", "e2b")
 DEFAULT_E2B_TEMPLATE = "sandkeep"
-DEFAULT_MAX_TURNS = 8
 DEFAULT_MAX_BUDGET_USD = 5.0  # hard spend cap passed to the agent CLI per run
 DEFAULT_TASK_TIMEOUT_SECONDS = 1800  # wall-clock cap for the agent run
 DEFAULT_EXEC_TIMEOUT_SECONDS = 120  # cap for individual sandbox exec calls
@@ -40,7 +39,8 @@ class Config:
     # Optional test-gated merge: a command run INSIDE the sandbox against the
     # agent's changes before `accept` will merge (BUILD_SPEC §14). Empty = off.
     test_command: str = ""
-    max_turns: int = DEFAULT_MAX_TURNS
+    # max_turns is gone: the upstream claude CLI removed the flag (see
+    # agent/claude.py). Runs are bounded by max_budget_usd + task timeout.
     max_budget_usd: float = DEFAULT_MAX_BUDGET_USD
     task_timeout_seconds: int = DEFAULT_TASK_TIMEOUT_SECONDS
     exec_timeout_seconds: int = DEFAULT_EXEC_TIMEOUT_SECONDS
@@ -63,8 +63,6 @@ class Config:
             )
         cfg.e2b_template = os.environ.get("SANDKEEP_E2B_TEMPLATE", cfg.e2b_template)
         cfg.test_command = os.environ.get("SANDKEEP_TEST_COMMAND", cfg.test_command)
-        if "SANDKEEP_MAX_TURNS" in os.environ:
-            cfg.max_turns = int(os.environ["SANDKEEP_MAX_TURNS"])
         if "SANDKEEP_MAX_BUDGET_USD" in os.environ:
             raw = os.environ["SANDKEEP_MAX_BUDGET_USD"]
             try:

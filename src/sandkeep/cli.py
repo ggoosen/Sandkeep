@@ -210,7 +210,6 @@ def _cmd_run(cfg: Config, args: argparse.Namespace) -> int:
         args.task,
         model=args.model,
         agent=driver.name,
-        max_turns=args.max_turns,
         max_budget_usd=args.max_budget_usd,
     )
     if task.state is TaskState.REVIEW:
@@ -439,6 +438,19 @@ def _cmd_reject(cfg: Config, args: argparse.Namespace) -> int:
     return 0
 
 
+class _RemovedFlag(argparse.Action):
+    """A flag the upstream agent CLI dropped: fail loud with the reason
+    instead of argparse's bare 'unrecognized arguments' (improvement plan,
+    step 10 — silently-ignored input is worse than an error)."""
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        parser.error(
+            f"{option_string} is no longer supported: the upstream claude CLI "
+            "removed this flag. Bound runs with --max-budget-usd (spend) or "
+            "SANDKEEP_TASK_TIMEOUT (wall clock) instead."
+        )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="sandkeep")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -474,7 +486,8 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"agent to run in the sandbox (default: {DEFAULT_AGENT}; "
              f"available: {', '.join(available_agents())})",
     )
-    run.add_argument("--max-turns", type=int, default=None)
+    run.add_argument("--max-turns", action=_RemovedFlag, nargs=1, metavar="N",
+                     help=argparse.SUPPRESS)
     run.add_argument("--max-budget-usd", type=float, default=None,
                      help="per-run spend cap handed to the agent CLI "
                           "(default from SANDKEEP_MAX_BUDGET_USD or 5.00)")

@@ -92,7 +92,7 @@ class Task:
     branch: str = ""                # task branch inside the sandbox
     state: TaskState = TaskState.NEW
     model: str = "claude-sonnet-4-6"  # task-tier model; verify current alias
-    max_turns: int = 8
+    max_budget_usd: float = 5.0       # per-run spend cap (--max-turns is gone upstream)
     allowed_tools: list[str] = field(default_factory=lambda: ["Read", "Edit", "Write", "Bash"])
     sandbox_id: str = ""
     patch_path: str = ""
@@ -212,11 +212,15 @@ Builds and runs the headless Claude Code command **inside** the sandbox. This is
 cd /work/repo && \
 claude -p "<instruction + contract-writing instructions>" \
   --output-format json \
-  --max-turns <task.max_turns> \
   --allowedTools "<comma-separated task.allowed_tools>" \
   --append-system-prompt-file /work/.sandkeep/agent_system_prompt.md \
+  --max-budget-usd <task.max_budget_usd> \
   --dangerously-skip-permissions
 ```
+
+> `--max-turns` was removed from the upstream claude CLI and is gone from
+> Sandkeep too; runs are bounded by the spend cap (`--max-budget-usd`,
+> configurable per run) and the controller's wall-clock timeout.
 
 Notes:
 - `--dangerously-skip-permissions` is acceptable here **because it runs inside the sandbox** (the docs explicitly note containers are the safe place for it). Never use it on the host.
