@@ -12,6 +12,7 @@ from __future__ import annotations
 from .base import AgentDriver, AgentRunResult, UnknownAgent
 from .claude import ClaudeDriver
 from .codex import CodexDriver
+from .gemini import GeminiDriver
 
 _DRIVERS: dict[str, AgentDriver] = {}
 
@@ -33,6 +34,7 @@ def available_agents() -> list[str]:
 
 register_driver(ClaudeDriver())
 register_driver(CodexDriver())
+register_driver(GeminiDriver())
 
 __all__ = [
     "AgentDriver",

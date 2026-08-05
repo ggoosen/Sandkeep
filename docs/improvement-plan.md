@@ -734,6 +734,16 @@ audited; a returned sandbox never leaks task state into the next.
 
 ### Step 21 — Verify Codex + ship a third driver, all broker-protected
 
+> **Status (shipped; flag-verification infra-bound).** Codex got its
+> `broker_route` in step 14; a **third driver** (`gemini`, `agent/gemini.py`)
+> now ships — `produces_contract=False`, its own `GEMINI_API_KEY`, per-agent
+> image, and a `/gemini` broker route so it runs key-broker-protected in proxy
+> mode (host-tested: base URL points at the route, no key in the sandbox). What
+> can't be done here is verifying each CLI's exact flags against the *installed*
+> tool (no Codex/Gemini CLI in this env) — the drivers target the documented
+> non-interactive modes and are marked to re-verify at build time, the same §6
+> discipline the Claude driver follows.
+
 **Problem.** The `codex` driver's flags are best-effort (not verified against the real
 CLI), and no third driver exists despite the seam being ready. With Step 14 done, any
 driver can run key-broker-protected.
