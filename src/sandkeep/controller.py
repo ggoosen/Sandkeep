@@ -29,7 +29,7 @@ from .models import TERMINAL_STATES, ResultsContract, Task, TaskState
 from .provisioner import ProvisioningError, provision
 from .sandbox.base import SandboxError, SandboxHandle, SandboxProvider
 from .state_store import StateStore
-from .violations import Violation, archive_sandbox, scan_agent_output
+from .violations import Violation, ViolationKind, archive_sandbox, scan_agent_output
 
 
 class ControllerError(Exception):
@@ -181,30 +181,49 @@ class Controller:
         )
         sandbox_seconds = time.monotonic() - started
 
+        in_tok, out_tok = agent_runner.usage_from_output(run.output)
+
         if run.timed_out:
+            # Ledger on every terminal state: a run that burned tokens is
+            # accounted for even when it fails (improvement plan, step 5).
+            self.store.record_cost(task.id, task.model, in_tok, out_tok, sandbox_seconds)
             self.store.update_state(task.id, TaskState.TIMEOUT, new_trace_id(), run.detail)
             self._roll_back(task, handle, detail=run.detail)
             return self.store.get_task(task.id)
 
-        found = scan_agent_output(run.stdout, run.stderr, network_denied=self.network_denied)
-        if found:
-            self._violation(task, handle, found)
+        # The output scan is a HEURISTIC over the agent's transcript. Split it:
+        #  - ESCAPE markers (docker.sock, nsenter, /proc/1/root) are specific and
+        #    serious — keep archiving as a VIOLATION for forensics.
+        #  - NETWORK / FILESYSTEM markers are prone to false positives (an agent
+        #    that merely *mentions* "/src … permission denied" on a clean run),
+        #    so they are ADVISORY: surfaced as risk flags at the gate, never
+        #    archiving a successful run. Real egress/write ground truth comes
+        #    from the sandbox boundary and, after the broker lands, from
+        #    proxy-reported denials. BUILD_SPEC §8/§10b; improvement plan step 5.
+        all_scan = scan_agent_output(run.stdout, run.stderr, network_denied=self.network_denied)
+        hard = [v for v in all_scan if v.kind is ViolationKind.ESCAPE]
+        scan_flags = [v for v in all_scan if v.kind is not ViolationKind.ESCAPE]
+        if hard:
+            self.store.record_cost(task.id, task.model, in_tok, out_tok, sandbox_seconds)
+            self._violation(task, handle, hard)
             return self.store.get_task(task.id)
 
         if run.exit_code != 0:
+            self.store.record_cost(task.id, task.model, in_tok, out_tok, sandbox_seconds)
             self._fail(task, handle, run.detail or f"agent exited {run.exit_code}")
             return self.store.get_task(task.id)
 
-        in_tok, out_tok = agent_runner.usage_from_output(run.output)
         if driver.produces_contract:
             # results contract + patch are the only things that cross back
             try:
                 raw = self.provider.read_file(handle, agent_runner.RESULTS_JSON_PATH)
                 contract = results.parse_results(raw, expected_task_id=task.id)
             except (FileNotFoundError, results.ContractError) as exc:
+                self.store.record_cost(task.id, task.model, in_tok, out_tok, sandbox_seconds)
                 self._fail(task, handle, f"results contract invalid: {exc}")
                 return self.store.get_task(task.id)
             if contract.status != "succeeded":
+                self.store.record_cost(task.id, task.model, in_tok, out_tok, sandbox_seconds)
                 self._fail(
                     task, handle,
                     f"agent reported status={contract.status}: {contract.summary}",
@@ -213,6 +232,7 @@ class Controller:
             self._land_in_review(
                 task, handle, raw, contract.summary,
                 usage=(in_tok, out_tok), sandbox_seconds=sandbox_seconds,
+                scan_flags=scan_flags,
             )
         else:
             # No agent-written contract; the diff is the truth (BUILD_SPEC §13).
@@ -220,6 +240,7 @@ class Controller:
                 task, handle,
                 summary=f"{driver.name} run (diff-synthesized contract).",
                 usage=(in_tok, out_tok), sandbox_seconds=sandbox_seconds,
+                scan_flags=scan_flags,
             )
         return self.store.get_task(task.id)
 
@@ -309,6 +330,7 @@ class Controller:
         usage: tuple[int, int],
         sandbox_seconds: float,
         empty_detail: str = "no changes produced",
+        scan_flags: list[Violation] | None = None,
     ) -> None:
         """Synthesize a contract from the extracted diff (the diff is the
         truth) and land at REVIEW — or fail if the diff is empty. Shared by
@@ -335,6 +357,7 @@ class Controller:
         self._land_in_review(
             task, handle, raw, summary,
             usage=usage, sandbox_seconds=sandbox_seconds, patch_path=patch_path,
+            scan_flags=scan_flags,
         )
 
     def _land_in_review(
@@ -347,6 +370,7 @@ class Controller:
         usage: tuple[int, int],
         sandbox_seconds: float,
         patch_path: Path | None = None,
+        scan_flags: list[Violation] | None = None,
     ) -> None:
         """Validate the patch, record cost + contract, transition
         SUCCEEDED → REVIEW. Shared by the headless and interactive paths.
@@ -376,6 +400,16 @@ class Controller:
                 "policy_risk_flagged",
                 trace_id=new_trace_id(), task_id=task.id,
                 flags=[{"category": f.category, "detail": f.detail} for f in flags],
+            )
+        # Advisory output-scan hits (step 5): persist to a sidecar so the gate
+        # surfaces them as risk flags, and audit them — but they never block.
+        if scan_flags:
+            (self.config.outputs_dir / f"{task.id}.scan.json").write_text(
+                json.dumps([{"kind": v.kind.value, "detail": v.detail} for v in scan_flags])
+            )
+            self.audit.log(
+                "output_scan_flagged", trace_id=new_trace_id(), task_id=task.id,
+                flags=[{"kind": v.kind.value, "detail": v.detail} for v in scan_flags],
             )
         # Phase 4: capture skills the agent authored — sandkeep metadata read
         # from the sandbox (excluded from the patch), saved to a host sidecar so
@@ -418,6 +452,16 @@ class Controller:
         mismatch = policy.cross_check_files(self._claimed_files(task), patch_text)
         if mismatch:
             flags.append(mismatch)
+        # Advisory output-scan hits captured at land time (step 5).
+        scan_path = self.config.outputs_dir / f"{task.id}.scan.json"
+        if scan_path.exists():
+            try:
+                for item in json.loads(scan_path.read_text()):
+                    flags.append(policy.RiskFlag(
+                        f"output-scan/{item['kind']}", item["detail"]
+                    ))
+            except (json.JSONDecodeError, OSError, KeyError):
+                pass
         return flags
 
     def _claimed_files(self, task: Task) -> list[str]:

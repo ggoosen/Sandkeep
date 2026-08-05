@@ -207,6 +207,16 @@ traceback without `--debug`.
 
 ### Step 5 — Demote the output scanner to advisory; adopt `stream-json`
 
+> **Status (partial, shipped).** The scanner split + advisory surfacing and
+> the ledger-on-every-terminal-state fix are implemented (`controller.py`,
+> `tests/test_advisory_scan.py`, `test_controller.py`). The `stream-json`
+> switch is **deferred**: it changes the `SandboxProvider` capture model
+> (one-shot `exec` → streamed events) and its event shape can't be verified
+> against the real `claude` CLI in this environment — shipping it blind would
+> break the §6 "verify flags against the real tool at build time" rule. Tokens
+> on failed runs are already recovered from the existing JSON `usage` field, so
+> the ledger goal is met without it.
+
 **Problem.** `scan_agent_output` (`violations.py:97-124`) is substring matching: an
 agent that *mentions* `/src` next to "permission denied" gets a successful run
 archived as VIOLATION before the contract is checked (`controller.py:163-166`) — and a
