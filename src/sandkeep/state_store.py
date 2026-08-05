@@ -298,3 +298,26 @@ class StateStore:
             return self._conn.execute(
                 "SELECT * FROM ledger WHERE task_id = ? ORDER BY ts", (task_id,)
             ).fetchall()
+
+    # -- aggregate reporting (`sandkeep stats`, step 23) ------------------
+
+    def cost_by_model(self) -> list[sqlite3.Row]:
+        """Aggregate ledger totals per (model, agent), joining agent from tasks."""
+        with self._lock:
+            return self._conn.execute(
+                "SELECT l.model AS model, t.agent AS agent,"
+                " COUNT(*) AS runs,"
+                " COALESCE(SUM(l.input_tokens), 0) AS input_tokens,"
+                " COALESCE(SUM(l.output_tokens), 0) AS output_tokens,"
+                " COALESCE(SUM(l.sandbox_seconds), 0) AS sandbox_seconds"
+                " FROM ledger l LEFT JOIN tasks t ON t.id = l.task_id"
+                " GROUP BY l.model, t.agent ORDER BY input_tokens DESC"
+            ).fetchall()
+
+    def task_outcomes(self) -> dict[str, int]:
+        """Count of tasks in each state — the fleet's outcome mix."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT state, COUNT(*) AS n FROM tasks GROUP BY state"
+            ).fetchall()
+        return {r["state"]: r["n"] for r in rows}

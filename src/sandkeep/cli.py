@@ -454,13 +454,8 @@ def _cmd_skills(cfg: Config, args: argparse.Namespace) -> int:
     return 1
 
 
-def _cmd_ps(cfg: Config, args: argparse.Namespace) -> int:
-    controller = _make_controller(cfg, network="none")
-    try:
-        infos = controller.list_sandboxes()
-    except NotImplementedError as exc:
-        print(f"error: {exc}", file=sys.stderr)
-        return 1
+def _render_ps(controller: Controller) -> int:
+    infos = controller.list_sandboxes()
     if not infos:
         print("no live sandboxes")
         return 0
@@ -471,6 +466,30 @@ def _cmd_ps(cfg: Config, args: argparse.Namespace) -> int:
     if reapable:
         print(f"\n{reapable} reapable (orphan/stale) — run `sandkeep gc`", file=sys.stderr)
     return 0
+
+
+def _cmd_ps(cfg: Config, args: argparse.Namespace) -> int:
+    controller = _make_controller(cfg, network="none")
+    if not getattr(args, "watch", False):
+        try:
+            return _render_ps(controller)
+        except NotImplementedError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+    # live refresh until Ctrl-C
+    import time
+    try:
+        while True:
+            print("\033[2J\033[H", end="")  # clear + home
+            print(f"sandkeep ps — refreshing every {args.interval}s (Ctrl-C to stop)\n")
+            try:
+                _render_ps(controller)
+            except NotImplementedError as exc:
+                print(f"error: {exc}", file=sys.stderr)
+                return 1
+            time.sleep(max(0.5, args.interval))
+    except KeyboardInterrupt:
+        return 0
 
 
 def _cmd_gc(cfg: Config, args: argparse.Namespace) -> int:
@@ -645,6 +664,32 @@ def doctor_checks(cfg: Config) -> list[tuple[str, bool, str]]:
     checks.append(("ANTHROPIC_API_KEY", key,
                    "present" if key else "run `sandkeep auth set`"))
     return checks
+
+
+def _cmd_stats(cfg: Config, args: argparse.Namespace) -> int:
+    cfg.ensure_dirs()
+    audit = AuditLog(cfg.audit_log_path)
+    store = StateStore(cfg.db_path, audit=audit)
+    try:
+        outcomes = store.task_outcomes()
+        by_model = store.cost_by_model()
+    finally:
+        store.close()
+
+    total = sum(outcomes.values())
+    print(f"tasks: {total}")
+    for state, n in sorted(outcomes.items(), key=lambda kv: -kv[1]):
+        print(f"  {state:14} {n}")
+    if by_model:
+        print("\ncost by model / agent:")
+        print(f"  {'MODEL':22} {'AGENT':8} {'RUNS':>5} {'IN_TOK':>10} {'OUT_TOK':>10} {'SANDBOX_S':>10}")
+        for r in by_model:
+            print(f"  {(r['model'] or '-'):22} {(r['agent'] or '-'):8} "
+                  f"{r['runs']:>5} {r['input_tokens']:>10} {r['output_tokens']:>10} "
+                  f"{r['sandbox_seconds']:>10.1f}")
+    else:
+        print("\nno ledger rows yet")
+    return 0
 
 
 def _cmd_doctor(cfg: Config, args: argparse.Namespace) -> int:
@@ -831,7 +876,12 @@ def build_parser() -> argparse.ArgumentParser:
                       help="test command (overrides SANDKEEP_TEST_COMMAND)")
 
     sub.add_parser("doctor", help="report the active containment posture + readiness")
-    sub.add_parser("ps", help="list live sandboxes and their task state")
+    sub.add_parser("stats", help="aggregate cost + task outcomes from the ledger")
+    ps = sub.add_parser("ps", help="list live sandboxes and their task state")
+    ps.add_argument("--watch", action="store_true",
+                    help="refresh continuously (Ctrl-C to stop)")
+    ps.add_argument("--interval", type=float, default=2.0,
+                    help="seconds between refreshes with --watch (default 2)")
     gc = sub.add_parser("gc", help="reap orphaned/stale sandboxes")
     gc.add_argument("--include-review", action="store_true",
                     help="also reap (reject) abandoned review sandboxes")
@@ -857,6 +907,7 @@ def main(argv: list[str] | None = None) -> int:
             "skills": _cmd_skills,
             "test": _cmd_test,
             "doctor": _cmd_doctor,
+            "stats": _cmd_stats,
             "ps": _cmd_ps,
             "gc": _cmd_gc,
             "status": _cmd_status,

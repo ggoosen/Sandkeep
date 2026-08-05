@@ -780,6 +780,12 @@ release publishes to (Test)PyPI via the trusted publisher.
 
 ### Step 23 — Observability
 
+> **Status (shipped).** `sandkeep stats` reports task-outcome counts and
+> per-model/agent ledger totals (runs, in/out tokens, sandbox-seconds) from
+> SQLite; `sandkeep ps --watch` refreshes the live sandbox list. No metrics
+> server (out of scope, as specified) — CLI reporting over the data already
+> stored. Host-tested in `tests/test_stats.py`.
+
 **Problem.** The only visibility is the JSON audit log and text `ps`/`show`; there's no
 aggregate view of cost/throughput for a running fleet.
 
