@@ -259,6 +259,38 @@ def test_draft_pr_gate_pushes_and_opens_pr_on_accept(
     assert "draft_pr_opened" in audit.path.read_text()
 
 
+def test_revise_iterates_in_existing_sandbox(controller, store, host_repo, monkeypatch):
+    """Docker-backed: a REVIEW task revised with a follow-up re-runs in the same
+    sandbox and lands back at REVIEW with an updated diff (step 17)."""
+    _stub_agent(monkeypatch, _do_work)
+    task = controller.run_task(str(host_repo), "add validation")
+    assert task.state is TaskState.REVIEW
+    sandbox = task.sandbox_id
+
+    def more_work(t, provider, handle):
+        provider.exec(handle, ["sh", "-c",
+                               "echo '# revised' >> /work/repo/parse_config.py"], timeout=60)
+        return _ok_result()
+
+    _stub_agent(monkeypatch, more_work)
+    revised = controller.revise(task.id, "also tidy it up")
+    assert revised.state is TaskState.REVIEW
+    assert revised.sandbox_id == sandbox          # same sandbox, no re-provision
+    assert controller.revision_count(revised) == 1
+    chain = _chain(store, task.id)
+    assert ("review", "running") in chain
+    # the updated patch includes the revision
+    assert "# revised" in Path(revised.patch_path).read_text()
+    controller.reject(task.id)
+
+
+def test_revise_rejects_non_review_task(controller, store, host_repo, monkeypatch):
+    _stub_agent(monkeypatch, lambda t, p, h: _ok_result(exit_code=1, detail="x"))
+    task = controller.run_task(str(host_repo), "x")  # ends FAILED/ROLLED_BACK
+    with pytest.raises(ControllerError):
+        controller.revise(task.id, "try again")
+
+
 def test_conflicts_detected_between_two_review_tasks(
     controller, store, host_repo, monkeypatch
 ):

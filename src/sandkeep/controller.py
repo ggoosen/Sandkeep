@@ -254,6 +254,42 @@ class Controller:
             )
         return self.store.get_task(task.id)
 
+    def revise(self, task_id: str, instruction: str, *,
+               max_budget_usd: float | None = None) -> Task:
+        """Iterate a task at REVIEW: re-dispatch the agent into its still-alive
+        sandbox with a follow-up instruction, against the clone that already
+        holds the prior changes, and land back at REVIEW with an updated diff
+        (improvement plan, step 17). No new sandbox; a REVIEW → RUNNING
+        transition is recorded per revision."""
+        task = self.store.get_task(task_id)
+        if task.state is not TaskState.REVIEW:
+            raise ControllerError(f"task is {task.state.value}, not review")
+        if not task.sandbox_id:
+            raise ControllerError("no live sandbox for task (already torn down?)")
+        driver = get_driver(task.agent)
+        handle = SandboxHandle(id=task.sandbox_id, workdir="/work/repo")
+        # the follow-up drives this dispatch; the DB keeps the original
+        # instruction for the record, revisions show in the transition chain.
+        task.instruction = instruction
+        if max_budget_usd is not None:
+            task.max_budget_usd = max_budget_usd
+        self.store.update_state(
+            task.id, TaskState.RUNNING, new_trace_id(), f"revision dispatched: {instruction}"
+        )
+        started = time.monotonic()
+        try:
+            return self._drive_run(task, handle, driver, started)
+        except BaseException as exc:  # noqa: BLE001 — same crash guard as run_task
+            self._fail_if_running(task, handle, f"revision aborted: {exc!r}")
+            raise
+
+    def revision_count(self, task: Task) -> int:
+        """How many times a task has been revised (REVIEW → RUNNING hops)."""
+        return sum(
+            1 for r in self.store.get_transitions(task.id)
+            if r["from_state"] == "review" and r["to_state"] == "running"
+        )
+
     # -- the interactive session (Phase 1, `sandkeep shell`) --------------
 
     def run_interactive(

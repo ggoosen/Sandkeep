@@ -9,6 +9,13 @@ import pytest
 
 from sandkeep.audit import new_trace_id
 from sandkeep.models import ALLOWED_TRANSITIONS, TaskState
+
+
+def test_review_can_go_back_to_running_for_revise():
+    """`sandkeep revise` re-dispatches a REVIEW task (step 17)."""
+    assert TaskState.RUNNING in ALLOWED_TRANSITIONS[TaskState.REVIEW]
+    # …but still can't skip to a terminal merge without going through review
+    assert TaskState.MERGED in ALLOWED_TRANSITIONS[TaskState.REVIEW]
 from sandkeep.state_store import IllegalTransition, TaskNotFound
 
 HAPPY_PATH = [

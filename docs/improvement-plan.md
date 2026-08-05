@@ -627,6 +627,14 @@ clearly; local-apply default is unchanged.
 
 ### Step 17 — Task iteration / resume
 
+> **Status (shipped).** `sandkeep revise <task_id> --task "<follow-up>"`
+> re-dispatches the agent into the task's still-alive REVIEW sandbox, against the
+> clone that already holds the prior changes, and lands back at REVIEW with an
+> updated diff — no new sandbox. Added a legal `REVIEW → RUNNING` transition and
+> a `revision_count` derived from the transition chain (no schema change). Reuses
+> the same crash guard as `run_task`. State-machine change host-tested; the
+> full re-run is Docker-backed in `test_controller.py`.
+
 **Problem.** A task is one-shot. If a diff is close but not right, there's no "revise it"
 — you start fresh, losing the sandbox and context.
 

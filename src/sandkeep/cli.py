@@ -573,6 +573,30 @@ def _cmd_reject(cfg: Config, args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_revise(cfg: Config, args: argparse.Namespace) -> int:
+    # iterate a REVIEW task in its existing sandbox → same egress the run used
+    task0 = None
+    network = _resolve_network(cfg, args)
+    controller = _make_controller(cfg, network=network)
+    task0 = controller.store.get_task(args.task_id)
+    driver = get_driver(task0.agent)
+    if not _ensure_secret(cfg, driver):
+        return 2
+    print(f"revising task {args.task_id} in its existing sandbox…", file=sys.stderr)
+    task = controller.revise(args.task_id, args.task, max_budget_usd=args.max_budget_usd)
+    if task.state is TaskState.REVIEW:
+        print(f"task {task.id}: updated (revision {controller.revision_count(task)})")
+        print(f"  patch: {task.patch_path}")
+        _print_policy(controller, task)
+        print(f"\n  sandkeep show   {task.id}")
+        print(f"  sandkeep accept {task.id}   # apply to a fresh branch")
+        print(f"  sandkeep revise {task.id} --task '…'   # iterate again")
+        return 0
+    last = controller.store.get_transitions(task.id)[-1]
+    print(f"revision ended in state: {task.state.value} ({last['detail']})", file=sys.stderr)
+    return 1
+
+
 def _docker_available() -> bool:
     import shutil
     if shutil.which("docker") is None:
@@ -789,6 +813,14 @@ def build_parser() -> argparse.ArgumentParser:
              "default) or 'draft-pr' (also push + open a draft PR; needs a "
              "GitHub remote + GITHUB_TOKEN). Also SANDKEEP_GATE.")
 
+    revise = sub.add_parser(
+        "revise", help="iterate a REVIEW task in its existing sandbox with a follow-up")
+    revise.add_argument("task_id")
+    revise.add_argument("--task", required=True, help="follow-up instruction for the agent")
+    revise.add_argument("--max-budget-usd", type=float, default=None)
+    revise.add_argument("--no-network", action="store_true",
+                        help="run the revision with no network")
+
     test = sub.add_parser("test", help="run the test gate in a task's sandbox (no merge)")
     test.add_argument("task_id")
     test.add_argument("--test-cmd", dest="test_cmd", default=None,
@@ -827,6 +859,7 @@ def main(argv: list[str] | None = None) -> int:
             "show": _cmd_show,
             "accept": _cmd_accept,
             "reject": _cmd_reject,
+            "revise": _cmd_revise,
         }[args.command]
         return handler(cfg, args)
     except TaskNotFound as exc:
