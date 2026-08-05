@@ -2,6 +2,7 @@
 
 > Run Claude Code agents in isolated, disposable sandboxes — one per task, with cheap rollback and a human gate before anything merges.
 
+[![CI](https://github.com/ggoosen/Sandkeep/actions/workflows/ci.yml/badge.svg)](https://github.com/ggoosen/Sandkeep/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/sandkeep.svg)](https://pypi.org/project/sandkeep/)
 [![License](https://img.shields.io/badge/license-PolyForm%20Noncommercial-blue.svg)](LICENSE)
 
