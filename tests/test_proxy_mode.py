@@ -59,6 +59,16 @@ def test_egress_mode_still_forwards_the_key(monkeypatch):
     assert env["ANTHROPIC_API_KEY"] == "sk-egress"
 
 
+def test_codex_proxy_points_at_openai_route(monkeypatch):
+    """A non-Anthropic driver runs broker-protected: base URL points at its own
+    /openai route and no OpenAI key enters the sandbox (step 14)."""
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-should-not-leak")
+    env = _controller("proxy")._agent_env(get_driver("codex"))
+    assert env["OPENAI_BASE_URL"] == "http://broker:8080/openai"
+    assert "OPENAI_API_KEY" not in env
+    assert "sk-openai-should-not-leak" not in "".join(env.values())
+
+
 # -- provider command sequence -------------------------------------------
 
 @dataclass

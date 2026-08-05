@@ -52,10 +52,53 @@ class DockerConfig:
     broker_image: str = "sandkeep-broker:latest"
     egress_allowlist: str = "api.anthropic.com,pypi.org,files.pythonhosted.org,registry.npmjs.org"
     broker_api_key: str = ""
+    # generalized broker routing (improvement plan, step 14): a JSON route list
+    # (SANDKEEP_ROUTES) + the per-route secrets the broker holds, so any driver
+    # runs key-broker-protected. Empty → the back-compat Anthropic-only path.
+    broker_routes: str = ""
+    broker_secrets: dict = field(default_factory=dict)
     # browser bridge (improvement plan, step 11): a headless-Chromium sidecar on
     # the task network exposing a CDP endpoint at http://browser:9222.
     browser: bool = False
     browser_image: str = "sandkeep-browser:latest"
+    # Hardening (improvement plan, step 12). seccomp_profile: path to a custom
+    # seccomp json passed as `--security-opt seccomp=<path>` ("" leaves Docker's
+    # built-in default profile in force). read_only_rootfs: run with a read-only
+    # root filesystem + tmpfs for the writable dirs, so the only mutable state is
+    # the disposable workspace. Off by default (verify against your image first).
+    seccomp_profile: str = ""
+    read_only_rootfs: bool = False
+
+
+# extra_run_args is an operator-supplied escape hatch. These flags would let it
+# re-introduce a writable path into the host, escalate privileges, or override
+# the network/security posture the provider sets — defeating the "one mount,
+# read-only, ever" invariant. Reject them loud rather than splice them in
+# (improvement plan, step 12).
+_FORBIDDEN_RUN_ARG_PREFIXES = (
+    "--privileged",
+    "-v", "--volume", "--mount",              # writable mounts into the host
+    "--cap-add",                               # re-adds a dropped capability
+    "--device",                                # host device access
+    "--security-opt",                          # e.g. seccomp=unconfined
+    "--userns",                                # e.g. --userns=host
+    "--pid", "--ipc", "--uts", "--cgroupns",   # host namespace sharing
+    "--network", "--net",                      # override the provider's netns
+)
+
+
+def validate_extra_run_args(args: list[str]) -> None:
+    """Reject operator-supplied docker run args that would breach the boundary
+    (writable host mounts, privilege escalation, namespace/network overrides).
+    Raises SandboxError naming the offending flag."""
+    for tok in args:
+        head = tok.split("=", 1)[0]
+        if head in _FORBIDDEN_RUN_ARG_PREFIXES:
+            raise SandboxError(
+                f"extra_run_args contains a forbidden flag {tok!r}: it could "
+                "breach the sandbox boundary (writable mount / privilege / "
+                "namespace override) and is refused"
+            )
 
 
 # Names derived from the sandbox container name so destroy() can find the
@@ -97,6 +140,8 @@ class DockerProvider(SandboxProvider):
         repo = Path(repo_path).resolve()
         if not repo.is_dir():
             raise SandboxError(f"repo path does not exist: {repo}")
+        # Fail loud on a boundary-breaching escape hatch BEFORE any docker call.
+        validate_extra_run_args(self.config.extra_run_args)
         name = f"sandkeep-{uuid.uuid4().hex[:12]}"
 
         # A dedicated per-task network is needed when we run sidecars (the
@@ -120,6 +165,7 @@ class DockerProvider(SandboxProvider):
             # the one mount: host repo, read-only. Never the docker socket,
             # never a writable path into the host.
             "--volume", f"{repo}:{SRC_MOUNT}:ro",
+            *self._hardening_args(),
             *self.config.extra_run_args,
         ]
         # Secrets stay OFF the argv: `--env KEY` (no value) makes the docker
@@ -137,6 +183,24 @@ class DockerProvider(SandboxProvider):
                 self._teardown_sidecars(name)
             raise SandboxError(f"docker run failed: {proc.stderr.decode(errors='replace')}")
         return SandboxHandle(id=name, workdir=WORKDIR)
+
+    def _hardening_args(self) -> list[str]:
+        """Extra `docker run` hardening flags (improvement plan, step 12):
+        a custom seccomp profile if configured, and an optional read-only root
+        filesystem with tmpfs for the dirs the agent legitimately writes."""
+        args: list[str] = []
+        if self.config.seccomp_profile:
+            args += ["--security-opt", f"seccomp={self.config.seccomp_profile}"]
+        if self.config.read_only_rootfs:
+            # only the disposable workspace + scratch are writable; the root FS
+            # (system binaries, the baked image) cannot be modified in-run
+            args += [
+                "--read-only",
+                "--tmpfs", "/work:rw,exec",
+                "--tmpfs", "/tmp:rw,exec",
+                "--tmpfs", "/home/node:rw,exec",
+            ]
+        return args
 
     def _provision_sidecars(self, sandbox_name: str) -> str:
         """Create the per-task network and stand up whichever sidecars the run
@@ -167,19 +231,30 @@ class DockerProvider(SandboxProvider):
         return net
 
     def _start_broker(self, net: str, sandbox_name: str) -> None:
-        """The egress broker: holds the API key, straddles the default bridge
-        (real egress) and the task's internal net, answers to alias `broker`."""
+        """The egress broker: holds the API key(s), straddles the default bridge
+        (real egress) and the task's internal net, answers to alias `broker`.
+
+        Generalized routing (step 14): when broker_routes is set, the broker is
+        given SANDKEEP_ROUTES + each route's secret (by its key_env), so any
+        driver runs key-broker-protected. Otherwise the back-compat
+        Anthropic-only path (broker_api_key → ANTHROPIC_API_KEY) is used."""
         broker = _broker_name(sandbox_name)
-        broker_env = {
-            "ANTHROPIC_API_KEY": self.config.broker_api_key,
-            "SANDKEEP_ALLOWLIST": self.config.egress_allowlist,
-        }
+        broker_env = {"SANDKEEP_ALLOWLIST": self.config.egress_allowlist}
+        env_flags = ["--env", "SANDKEEP_ALLOWLIST"]
+        if self.config.broker_routes:
+            broker_env["SANDKEEP_ROUTES"] = self.config.broker_routes
+            env_flags += ["--env", "SANDKEEP_ROUTES"]
+            for key_env, value in self.config.broker_secrets.items():
+                broker_env[key_env] = value
+                env_flags += ["--env", key_env]
+        else:  # back-compat: single Anthropic route from broker_api_key
+            broker_env["ANTHROPIC_API_KEY"] = self.config.broker_api_key
+            env_flags += ["--env", "ANTHROPIC_API_KEY"]
         up = self._run(
             ["docker", "run", "--detach", "--name", broker,
              "--memory", "512m", "--pids-limit", "128",
              "--security-opt", "no-new-privileges", "--cap-drop", "ALL",
-             "--env", "ANTHROPIC_API_KEY", "--env", "SANDKEEP_ALLOWLIST",
-             self.config.broker_image],
+             *env_flags, self.config.broker_image],
             timeout=60, env={**os.environ, **broker_env},
         )
         if up.returncode != 0:

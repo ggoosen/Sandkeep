@@ -281,8 +281,43 @@ class StateStore:
                 (task_id, model, input_tokens, output_tokens, sandbox_seconds, _now()),
             )
 
+    def committed_budget_since(self, since_iso: str) -> float:
+        """Sum of per-run budgets committed by tasks created at/after
+        `since_iso` — the fleet-budget accounting basis (step 18). Committed,
+        not measured: each run's actual spend is ≤ its own max_budget_usd."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT COALESCE(SUM(max_budget_usd), 0) AS s FROM tasks"
+                " WHERE created_at >= ?",
+                (since_iso,),
+            ).fetchone()
+        return float(row["s"])
+
     def get_ledger(self, task_id: str) -> list[sqlite3.Row]:
         with self._lock:
             return self._conn.execute(
                 "SELECT * FROM ledger WHERE task_id = ? ORDER BY ts", (task_id,)
             ).fetchall()
+
+    # -- aggregate reporting (`sandkeep stats`, step 23) ------------------
+
+    def cost_by_model(self) -> list[sqlite3.Row]:
+        """Aggregate ledger totals per (model, agent), joining agent from tasks."""
+        with self._lock:
+            return self._conn.execute(
+                "SELECT l.model AS model, t.agent AS agent,"
+                " COUNT(*) AS runs,"
+                " COALESCE(SUM(l.input_tokens), 0) AS input_tokens,"
+                " COALESCE(SUM(l.output_tokens), 0) AS output_tokens,"
+                " COALESCE(SUM(l.sandbox_seconds), 0) AS sandbox_seconds"
+                " FROM ledger l LEFT JOIN tasks t ON t.id = l.task_id"
+                " GROUP BY l.model, t.agent ORDER BY input_tokens DESC"
+            ).fetchall()
+
+    def task_outcomes(self) -> dict[str, int]:
+        """Count of tasks in each state — the fleet's outcome mix."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT state, COUNT(*) AS n FROM tasks GROUP BY state"
+            ).fetchall()
+        return {r["state"]: r["n"] for r in rows}

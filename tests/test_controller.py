@@ -225,6 +225,72 @@ def test_risk_flags_surface_and_are_audited(controller, store, host_repo, monkey
     controller.reject(task.id)
 
 
+def test_draft_pr_gate_pushes_and_opens_pr_on_accept(
+    store, audit, provider, host_repo, tmp_path, monkeypatch
+):
+    """Docker-backed: with gate=draft-pr and an injected gateway, accept applies
+    the branch locally AND drives the PR gate; the task reaches MERGED with the
+    PR recorded (improvement plan, step 16)."""
+    from sandkeep import gate as gate_mod
+
+    monkeypatch.setenv("SANDKEEP_HOME", str(tmp_path / "skhome"))
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    cfg = Config.from_env()
+    cfg.gate = "draft-pr"
+
+    class FakeGate:
+        opened = None
+
+        def open(self, *, repo_path, branch, title, body):
+            FakeGate.opened = dict(branch=branch, title=title)
+            return gate_mod.PRResult(url="https://github.com/o/r/pull/9", number=9)
+
+    fake = FakeGate()
+    controller = Controller(cfg, store, audit, provider, network_denied=True, pr_gate=fake)
+    _stub_agent(monkeypatch, _do_work)
+    task = controller.run_task(str(host_repo), "add validation")
+    assert task.state is TaskState.REVIEW
+
+    controller.accept(task.id)
+    assert controller.store.get_task(task.id).state is TaskState.MERGED
+    assert fake.opened["branch"] == f"sandkeep-accepted/{task.id}"
+    detail = controller.store.get_transitions(task.id)[-1]["detail"]
+    assert "pull/9" in detail
+    assert "draft_pr_opened" in audit.path.read_text()
+
+
+def test_revise_iterates_in_existing_sandbox(controller, store, host_repo, monkeypatch):
+    """Docker-backed: a REVIEW task revised with a follow-up re-runs in the same
+    sandbox and lands back at REVIEW with an updated diff (step 17)."""
+    _stub_agent(monkeypatch, _do_work)
+    task = controller.run_task(str(host_repo), "add validation")
+    assert task.state is TaskState.REVIEW
+    sandbox = task.sandbox_id
+
+    def more_work(t, provider, handle):
+        provider.exec(handle, ["sh", "-c",
+                               "echo '# revised' >> /work/repo/parse_config.py"], timeout=60)
+        return _ok_result()
+
+    _stub_agent(monkeypatch, more_work)
+    revised = controller.revise(task.id, "also tidy it up")
+    assert revised.state is TaskState.REVIEW
+    assert revised.sandbox_id == sandbox          # same sandbox, no re-provision
+    assert controller.revision_count(revised) == 1
+    chain = _chain(store, task.id)
+    assert ("review", "running") in chain
+    # the updated patch includes the revision
+    assert "# revised" in Path(revised.patch_path).read_text()
+    controller.reject(task.id)
+
+
+def test_revise_rejects_non_review_task(controller, store, host_repo, monkeypatch):
+    _stub_agent(monkeypatch, lambda t, p, h: _ok_result(exit_code=1, detail="x"))
+    task = controller.run_task(str(host_repo), "x")  # ends FAILED/ROLLED_BACK
+    with pytest.raises(ControllerError):
+        controller.revise(task.id, "try again")
+
+
 def test_conflicts_detected_between_two_review_tasks(
     controller, store, host_repo, monkeypatch
 ):

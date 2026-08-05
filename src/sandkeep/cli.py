@@ -43,6 +43,24 @@ SECURITY_BANNER = (
 )
 
 
+def security_banner(cfg: Config, network: str) -> str:
+    """A banner that reports the REAL posture (backend + network), not a fixed
+    warning (improvement plan, step 13). The user should always know exactly
+    how contained the run they're about to start actually is."""
+    if cfg.posture == "microvm":
+        head = "🔒 posture: microVM (E2B) — hardware-isolated boundary."
+    elif network == "proxy":
+        head = ("🔒 posture: hardened Docker + key broker (proxy). Docker is a "
+                "shared-kernel boundary — a determined agent may still escape; "
+                "use the microVM backend for a boundary you can point to in a "
+                "security review.")
+    else:
+        head = ("⚠  posture: Docker (mechanics harness, NOT a security boundary)"
+                f" + {network} network. Do not run agents or code you genuinely "
+                "distrust; use SANDKEEP_NETWORK=proxy and/or the microVM backend.")
+    return head + "\n"
+
+
 def _make_provider(cfg: Config, *, network: str, agent: str = DEFAULT_AGENT,
                    browser: bool = False):
     """Construct the configured sandbox backend (SANDKEEP_BACKEND), using the
@@ -54,13 +72,24 @@ def _make_provider(cfg: Config, *, network: str, agent: str = DEFAULT_AGENT,
 
         return E2BProvider(E2BConfig(template=cfg.e2b_template, network=network))
     # In proxy mode the DockerProvider stands up the key-broker sidecar; the
-    # key is handed to the BROKER config here, never to the sandbox env.
-    broker_key = load_secret(cfg, "ANTHROPIC_API_KEY") or "" if network == "proxy" else ""
+    # key(s) are handed to the BROKER config here, never to the sandbox env.
+    # The route + secret come from the selected driver so any agent — not just
+    # claude — runs key-broker-protected (step 14).
+    broker_routes = ""
+    broker_secrets: dict[str, str] = {}
+    if network == "proxy":
+        drv = get_driver(agent)
+        route = drv.broker_route
+        if route:
+            broker_routes = json.dumps([route])
+            key = load_secret(cfg, route["key_env"]) or ""
+            broker_secrets[route["key_env"]] = key
     return DockerProvider(DockerConfig(
         image=cfg.image_for(agent), network=network,
         broker_image=cfg.broker_image, egress_allowlist=cfg.egress_allowlist,
-        broker_api_key=broker_key,
+        broker_routes=broker_routes, broker_secrets=broker_secrets,
         browser=browser, browser_image=cfg.browser_image,
+        seccomp_profile=cfg.seccomp_profile, read_only_rootfs=cfg.read_only_rootfs,
     ))
 
 
@@ -123,10 +152,20 @@ def _mask(key: str) -> str:
 def _resolve_network(cfg: Config, args: argparse.Namespace) -> str:
     """Network mode for a run: `--no-network` forces off, else config/env
     (SANDKEEP_NETWORK, default egress). The agent needs egress for its API, so
-    `none` is for boundary testing / offline agents (BUILD_SPEC §16)."""
-    if getattr(args, "no_network", False):
-        return "none"
-    return cfg.network
+    `none` is for boundary testing / offline agents (BUILD_SPEC §16).
+
+    Fails loud on proxy mode + the E2B backend: the key broker isn't wired
+    there yet, and silently downgrading to egress would forward the key into
+    the microVM under the banner of 'proxy protection' (improvement plan,
+    step 19)."""
+    network = "none" if getattr(args, "no_network", False) else cfg.network
+    if network == "proxy" and cfg.backend == "e2b":
+        raise ControllerError(
+            "SANDKEEP_NETWORK=proxy (key broker) is not supported on the e2b "
+            "backend yet — use the Docker backend for broker protection, or set "
+            "network to none/egress"
+        )
+    return network
 
 
 def _warn_if_no_network(network: str) -> None:
@@ -144,6 +183,28 @@ def _warn_if_no_network(network: str) -> None:
             "the allowlist. (build the broker image with `image build --with-broker`)",
             file=sys.stderr,
         )
+
+
+def _warn_repo_exposure(cfg: Config, repo: str) -> None:
+    """Read-only ≠ unreadable: warn before a run if the repo the agent will be
+    able to read contains secret-shaped content (improvement plan, step 15)."""
+    if not cfg.scan_repo_secrets:
+        return
+    from .provisioner import scan_repo_secrets
+
+    try:
+        exposed = scan_repo_secrets(repo)
+    except OSError:
+        return
+    if exposed:
+        print(f"⚠ this repo contains {len(exposed)} apparent secret(s) the agent "
+              "will be able to read from /src (read-only ≠ unreadable):",
+              file=sys.stderr)
+        for f in exposed[:5]:
+            print(f"    {f}", file=sys.stderr)
+        if len(exposed) > 5:
+            print(f"    … and {len(exposed) - 5} more", file=sys.stderr)
+        print("  (set SANDKEEP_SCAN_SECRETS=off to silence)", file=sys.stderr)
 
 
 def _warn_if_browser(browser: bool) -> None:
@@ -175,6 +236,11 @@ def _print_policy(controller: Controller, task) -> None:
         print("\n  ✎ skills authored (registered for this repo on accept):")
         for s in authored:
             print(f"      {s.name} — {s.description}")
+    arts = controller.captured_artifacts(task)
+    if arts:
+        print("\n  📎 artifacts (excluded from the diff; in the outputs sidecar):")
+        for name in arts:
+            print(f"      {name}")
 
 
 # Friendly "that doesn't look right" hints per known key (not enforced).
@@ -258,10 +324,9 @@ def _cmd_run(cfg: Config, args: argparse.Namespace) -> int:
         return 2
     if cfg.backend == "e2b" and not _ensure_named_secret(cfg, "E2B_API_KEY"):
         return 2
-    print(SECURITY_BANNER, file=sys.stderr)
-    # the agent needs egress to api.anthropic.com by default — gated here on
-    # purpose; TODO(phase-2): brokering egress *allowlist* proxy + secret broker.
     network = _resolve_network(cfg, args)
+    print(security_banner(cfg, network), file=sys.stderr)
+    _warn_repo_exposure(cfg, args.repo)
     _warn_if_no_network(network)
     browser = _resolve_browser(cfg, args, network)
     _warn_if_browser(browser)
@@ -313,8 +378,9 @@ def _cmd_batch(cfg: Config, args: argparse.Namespace) -> int:
         print("error: no tasks — pass --task (repeatable) or --tasks-file",
               file=sys.stderr)
         return 2
-    print(SECURITY_BANNER, file=sys.stderr)
     network = _resolve_network(cfg, args)
+    print(security_banner(cfg, network), file=sys.stderr)
+    _warn_repo_exposure(cfg, args.repo)
     _warn_if_no_network(network)
     browser = _resolve_browser(cfg, args, network)
     _warn_if_browser(browser)
@@ -327,7 +393,8 @@ def _cmd_batch(cfg: Config, args: argparse.Namespace) -> int:
              max_budget_usd=args.max_budget_usd)
         for t in tasks
     ]
-    results = run_concurrent(controller, specs, max_workers=args.max_parallel)
+    results = run_concurrent(controller, specs, max_workers=args.max_parallel,
+                             total_budget_usd=args.total_budget_usd)
 
     print(f"{len(results)} task(s):")
     rc = 0
@@ -351,12 +418,11 @@ def _cmd_shell(cfg: Config, args: argparse.Namespace) -> int:
         return 2
     if cfg.backend == "e2b" and not _ensure_named_secret(cfg, "E2B_API_KEY"):
         return 2
-    print(SECURITY_BANNER, file=sys.stderr)
+    network = _resolve_network(cfg, args)
+    print(security_banner(cfg, network), file=sys.stderr)
+    _warn_repo_exposure(cfg, args.repo)
     print("provisioning sandbox — your repo is mounted read-only, work happens "
           "on a clone inside\n", file=sys.stderr)
-    # interactive agent needs egress to api.anthropic.com by default (gated on
-    # purpose; TODO(phase-2): brokering egress allowlist proxy)
-    network = _resolve_network(cfg, args)
     _warn_if_no_network(network)
     browser = _resolve_browser(cfg, args, network)
     _warn_if_browser(browser)
@@ -393,13 +459,8 @@ def _cmd_skills(cfg: Config, args: argparse.Namespace) -> int:
     return 1
 
 
-def _cmd_ps(cfg: Config, args: argparse.Namespace) -> int:
-    controller = _make_controller(cfg, network="none")
-    try:
-        infos = controller.list_sandboxes()
-    except NotImplementedError as exc:
-        print(f"error: {exc}", file=sys.stderr)
-        return 1
+def _render_ps(controller: Controller) -> int:
+    infos = controller.list_sandboxes()
     if not infos:
         print("no live sandboxes")
         return 0
@@ -410,6 +471,30 @@ def _cmd_ps(cfg: Config, args: argparse.Namespace) -> int:
     if reapable:
         print(f"\n{reapable} reapable (orphan/stale) — run `sandkeep gc`", file=sys.stderr)
     return 0
+
+
+def _cmd_ps(cfg: Config, args: argparse.Namespace) -> int:
+    controller = _make_controller(cfg, network="none")
+    if not getattr(args, "watch", False):
+        try:
+            return _render_ps(controller)
+        except NotImplementedError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+    # live refresh until Ctrl-C
+    import time
+    try:
+        while True:
+            print("\033[2J\033[H", end="")  # clear + home
+            print(f"sandkeep ps — refreshing every {args.interval}s (Ctrl-C to stop)\n")
+            try:
+                _render_ps(controller)
+            except NotImplementedError as exc:
+                print(f"error: {exc}", file=sys.stderr)
+                return 1
+            time.sleep(max(0.5, args.interval))
+    except KeyboardInterrupt:
+        return 0
 
 
 def _cmd_gc(cfg: Config, args: argparse.Namespace) -> int:
@@ -477,6 +562,8 @@ def _cmd_test(cfg: Config, args: argparse.Namespace) -> int:
 
 
 def _cmd_accept(cfg: Config, args: argparse.Namespace) -> int:
+    if getattr(args, "gate", None):
+        cfg.gate = args.gate  # flag overrides SANDKEEP_GATE for this accept
     # tests may need to fetch deps → egress; falls back fine if none configured
     controller = _make_controller(cfg, network="egress")
     task = controller.store.get_task(args.task_id)
@@ -497,6 +584,9 @@ def _cmd_accept(cfg: Config, args: argparse.Namespace) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 1
     print(f"applied to branch sandkeep-accepted/{task.id} @ {sha[:12]}")
+    if cfg.gate == "draft-pr":
+        last = controller.store.get_transitions(task.id)[-1]
+        print(f"  {last['detail']}")
     print("your working tree and current branch are untouched")
     return 0
 
@@ -506,6 +596,121 @@ def _cmd_reject(cfg: Config, args: argparse.Namespace) -> int:
     controller.reject(args.task_id)
     print(f"task {args.task_id} rejected; sandbox discarded, host repo untouched")
     return 0
+
+
+def _cmd_revise(cfg: Config, args: argparse.Namespace) -> int:
+    # iterate a REVIEW task in its existing sandbox → same egress the run used
+    task0 = None
+    network = _resolve_network(cfg, args)
+    controller = _make_controller(cfg, network=network)
+    task0 = controller.store.get_task(args.task_id)
+    driver = get_driver(task0.agent)
+    if not _ensure_secret(cfg, driver):
+        return 2
+    print(f"revising task {args.task_id} in its existing sandbox…", file=sys.stderr)
+    task = controller.revise(args.task_id, args.task, max_budget_usd=args.max_budget_usd)
+    if task.state is TaskState.REVIEW:
+        print(f"task {task.id}: updated (revision {controller.revision_count(task)})")
+        print(f"  patch: {task.patch_path}")
+        _print_policy(controller, task)
+        print(f"\n  sandkeep show   {task.id}")
+        print(f"  sandkeep accept {task.id}   # apply to a fresh branch")
+        print(f"  sandkeep revise {task.id} --task '…'   # iterate again")
+        return 0
+    last = controller.store.get_transitions(task.id)[-1]
+    print(f"revision ended in state: {task.state.value} ({last['detail']})", file=sys.stderr)
+    return 1
+
+
+def _docker_available() -> bool:
+    import shutil
+    if shutil.which("docker") is None:
+        return False
+    import subprocess
+    return subprocess.run(["docker", "info"], capture_output=True).returncode == 0
+
+
+def _image_present(tag: str) -> bool:
+    import subprocess
+    return subprocess.run(["docker", "image", "inspect", tag],
+                          capture_output=True).returncode == 0
+
+
+def doctor_checks(cfg: Config) -> list[tuple[str, bool, str]]:
+    """Readiness checks for the active posture (improvement plan, step 13).
+    Pure-ish: returns (label, ok, detail) so it's testable and the CLI just
+    renders it. Only inspects images when the docker daemon is up."""
+    checks: list[tuple[str, bool, str]] = []
+    checks.append(("posture", True, f"{cfg.posture} (backend: {cfg.backend})"))
+    if cfg.backend == "docker":
+        up = _docker_available()
+        checks.append(("docker daemon", up,
+                       "reachable" if up else "not reachable — start Docker"))
+        checks.append(("sandbox image", up and _image_present(cfg.image),
+                       cfg.image if up else "unknown (daemon down)"))
+        if cfg.network == "proxy":
+            checks.append(("broker image", up and _image_present(cfg.broker_image),
+                           "build with `image build --with-broker`"))
+        if cfg.browser:
+            checks.append(("browser image", up and _image_present(cfg.browser_image),
+                           "build with `image build --with-browser`"))
+    else:  # e2b
+        try:
+            import e2b  # noqa: F401
+            has_pkg = True
+        except ImportError:
+            has_pkg = False
+        checks.append(("e2b package", has_pkg,
+                       "installed" if has_pkg else "pip install 'sandkeep[e2b]'"))
+        has_key = bool(load_secret(cfg, "E2B_API_KEY"))
+        checks.append(("E2B_API_KEY", has_key,
+                       "present" if has_key else "run `sandkeep auth set E2B_API_KEY`"))
+    key = bool(load_secret(cfg, "ANTHROPIC_API_KEY"))
+    checks.append(("ANTHROPIC_API_KEY", key,
+                   "present" if key else "run `sandkeep auth set`"))
+    return checks
+
+
+def _cmd_stats(cfg: Config, args: argparse.Namespace) -> int:
+    cfg.ensure_dirs()
+    audit = AuditLog(cfg.audit_log_path)
+    store = StateStore(cfg.db_path, audit=audit)
+    try:
+        outcomes = store.task_outcomes()
+        by_model = store.cost_by_model()
+    finally:
+        store.close()
+
+    total = sum(outcomes.values())
+    print(f"tasks: {total}")
+    for state, n in sorted(outcomes.items(), key=lambda kv: -kv[1]):
+        print(f"  {state:14} {n}")
+    if by_model:
+        print("\ncost by model / agent:")
+        print(f"  {'MODEL':22} {'AGENT':8} {'RUNS':>5} {'IN_TOK':>10} {'OUT_TOK':>10} {'SANDBOX_S':>10}")
+        for r in by_model:
+            print(f"  {(r['model'] or '-'):22} {(r['agent'] or '-'):8} "
+                  f"{r['runs']:>5} {r['input_tokens']:>10} {r['output_tokens']:>10} "
+                  f"{r['sandbox_seconds']:>10.1f}")
+    else:
+        print("\nno ledger rows yet")
+    return 0
+
+
+def _cmd_doctor(cfg: Config, args: argparse.Namespace) -> int:
+    checks = doctor_checks(cfg)
+    print(f"sandkeep doctor — posture: {cfg.posture}\n")
+    all_ok = True
+    for label, ok, detail in checks:
+        mark = "✓" if ok else "✗"
+        if not ok:
+            all_ok = False
+        print(f"  {mark}  {label:20}  {detail}")
+    if cfg.posture == "hardened-docker":
+        print("\nnote: Docker is a shared-kernel boundary. For a boundary you can "
+              "point to in a security review, use the microVM backend "
+              "(SANDKEEP_POSTURE=microvm / SANDKEEP_BACKEND=e2b).")
+    return 0 if all_ok else 1
 
 
 class _RemovedFlag(argparse.Action):
@@ -604,6 +809,9 @@ def build_parser() -> argparse.ArgumentParser:
                             "(default from SANDKEEP_MAX_BUDGET_USD or 5.00)")
     batch.add_argument("--max-parallel", type=int, default=4,
                        help="max tasks running at once (default: 4)")
+    batch.add_argument("--total-budget-usd", type=float, default=None,
+                       help="stop dispatching new tasks once the committed spend "
+                            "(sum of per-run budgets) would exceed this cap")
     batch.add_argument("--no-network", action="store_true",
                        help="run sandboxes with no network at all")
     _add_browser_flag(batch)
@@ -653,13 +861,32 @@ def build_parser() -> argparse.ArgumentParser:
     accept.add_argument(
         "--no-test", action="store_true",
         help="skip the configured test gate for this accept")
+    accept.add_argument(
+        "--gate", choices=("local", "draft-pr"), default=None,
+        help="how to deliver the accepted change: 'local' (fresh host branch, "
+             "default) or 'draft-pr' (also push + open a draft PR; needs a "
+             "GitHub remote + GITHUB_TOKEN). Also SANDKEEP_GATE.")
+
+    revise = sub.add_parser(
+        "revise", help="iterate a REVIEW task in its existing sandbox with a follow-up")
+    revise.add_argument("task_id")
+    revise.add_argument("--task", required=True, help="follow-up instruction for the agent")
+    revise.add_argument("--max-budget-usd", type=float, default=None)
+    revise.add_argument("--no-network", action="store_true",
+                        help="run the revision with no network")
 
     test = sub.add_parser("test", help="run the test gate in a task's sandbox (no merge)")
     test.add_argument("task_id")
     test.add_argument("--test-cmd", dest="test_cmd", default=None,
                       help="test command (overrides SANDKEEP_TEST_COMMAND)")
 
-    sub.add_parser("ps", help="list live sandboxes and their task state")
+    sub.add_parser("doctor", help="report the active containment posture + readiness")
+    sub.add_parser("stats", help="aggregate cost + task outcomes from the ledger")
+    ps = sub.add_parser("ps", help="list live sandboxes and their task state")
+    ps.add_argument("--watch", action="store_true",
+                    help="refresh continuously (Ctrl-C to stop)")
+    ps.add_argument("--interval", type=float, default=2.0,
+                    help="seconds between refreshes with --watch (default 2)")
     gc = sub.add_parser("gc", help="reap orphaned/stale sandboxes")
     gc.add_argument("--include-review", action="store_true",
                     help="also reap (reject) abandoned review sandboxes")
@@ -684,12 +911,15 @@ def main(argv: list[str] | None = None) -> int:
             "shell": _cmd_shell,
             "skills": _cmd_skills,
             "test": _cmd_test,
+            "doctor": _cmd_doctor,
+            "stats": _cmd_stats,
             "ps": _cmd_ps,
             "gc": _cmd_gc,
             "status": _cmd_status,
             "show": _cmd_show,
             "accept": _cmd_accept,
             "reject": _cmd_reject,
+            "revise": _cmd_revise,
         }[args.command]
         return handler(cfg, args)
     except TaskNotFound as exc:

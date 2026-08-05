@@ -24,8 +24,14 @@ DEFAULT_EGRESS_ALLOWLIST = (
     "api.anthropic.com,pypi.org,files.pythonhosted.org,registry.npmjs.org"
 )
 DEFAULT_BROWSER_IMAGE = "sandkeep-browser:latest"
+GATE_MODES = ("local", "draft-pr")
 DEFAULT_BACKEND = "docker"  # "docker" (Phase 0–1 harness) | "e2b" (microVM, Phase 2)
 BACKENDS = ("docker", "e2b")
+# Posture is a friendly selector over backend (improvement plan, step 13): it
+# picks the backend and the banner/doctor report the *real* posture. The default
+# stays hardened-docker until E2B reaches broker+browser parity (step 19).
+POSTURES = ("hardened-docker", "microvm")
+_POSTURE_BACKEND = {"hardened-docker": "docker", "microvm": "e2b"}
 DEFAULT_E2B_TEMPLATE = "sandkeep"
 DEFAULT_MAX_BUDGET_USD = 5.0  # hard spend cap passed to the agent CLI per run
 DEFAULT_MAX_PATCH_BYTES = 5 * 1024 * 1024  # cap on the size of a returned patch
@@ -51,6 +57,20 @@ class Config:
     # instead of launching its own browser. Off by default; --browser turns it on.
     browser: bool = False
     browser_image: str = DEFAULT_BROWSER_IMAGE
+    # Docker hardening (improvement plan, step 12): a custom seccomp profile path
+    # ("" leaves Docker's built-in default), and an opt-in read-only rootfs.
+    seccomp_profile: str = ""
+    read_only_rootfs: bool = False
+    # Human gate (improvement plan, step 16): "local" applies to a fresh host
+    # branch; "draft-pr" also pushes that branch and opens a draft PR.
+    gate: str = "local"
+    git_remote: str = "origin"
+    pr_base: str = "main"
+    # Repo read-exposure (improvement plan, step 15). full_history: clone deep
+    # history into the sandbox (default off = shallow, so the clone carries no
+    # deep history). scan_repo_secrets: scan what /src exposes and warn/audit.
+    full_history: bool = False
+    scan_repo_secrets: bool = True
     backend: str = DEFAULT_BACKEND
     e2b_template: str = DEFAULT_E2B_TEMPLATE
     # Optional test-gated merge: a command run INSIDE the sandbox against the
@@ -59,7 +79,15 @@ class Config:
     # max_turns is gone: the upstream claude CLI removed the flag (see
     # agent/claude.py). Runs are bounded by max_budget_usd + task timeout.
     max_budget_usd: float = DEFAULT_MAX_BUDGET_USD
+    # Fleet-level guard (improvement plan, step 18): a rolling 24h cap on the
+    # spend COMMITTED across runs (sum of per-run --max-budget-usd), so a
+    # runaway fleet can't rack up cost. None = no daily cap. Committed (not
+    # measured) bounds worst-case without needing a live price table — each
+    # run's actual spend is already ≤ its own --max-budget-usd.
+    daily_budget_usd: float | None = None
     max_patch_bytes: int = DEFAULT_MAX_PATCH_BYTES
+    # Cap per agent-produced artifact (screenshots/reports, step 24).
+    max_artifact_bytes: int = 5 * 1024 * 1024
     task_timeout_seconds: int = DEFAULT_TASK_TIMEOUT_SECONDS
     exec_timeout_seconds: int = DEFAULT_EXEC_TIMEOUT_SECONDS
 
@@ -79,11 +107,33 @@ class Config:
         if "SANDKEEP_BROWSER" in os.environ:
             cfg.browser = os.environ["SANDKEEP_BROWSER"].lower() in ("1", "on", "true", "yes")
         cfg.browser_image = os.environ.get("SANDKEEP_BROWSER_IMAGE", cfg.browser_image)
+        cfg.seccomp_profile = os.environ.get("SANDKEEP_SECCOMP", cfg.seccomp_profile)
+        if "SANDKEEP_READONLY_ROOTFS" in os.environ:
+            cfg.read_only_rootfs = os.environ["SANDKEEP_READONLY_ROOTFS"].lower() in (
+                "1", "on", "true", "yes")
+        cfg.gate = os.environ.get("SANDKEEP_GATE", cfg.gate)
+        if cfg.gate not in GATE_MODES:
+            raise ValueError(f"SANDKEEP_GATE must be one of {GATE_MODES}, got {cfg.gate!r}")
+        cfg.git_remote = os.environ.get("SANDKEEP_GIT_REMOTE", cfg.git_remote)
+        cfg.pr_base = os.environ.get("SANDKEEP_PR_BASE", cfg.pr_base)
+        if "SANDKEEP_FULL_HISTORY" in os.environ:
+            cfg.full_history = os.environ["SANDKEEP_FULL_HISTORY"].lower() in (
+                "1", "on", "true", "yes")
+        if "SANDKEEP_SCAN_SECRETS" in os.environ:
+            cfg.scan_repo_secrets = os.environ["SANDKEEP_SCAN_SECRETS"].lower() not in (
+                "0", "off", "false", "no")
         cfg.backend = os.environ.get("SANDKEEP_BACKEND", cfg.backend)
         if cfg.backend not in BACKENDS:
             raise ValueError(
                 f"SANDKEEP_BACKEND must be one of {BACKENDS}, got {cfg.backend!r}"
             )
+        # Posture is an input alias for backend (explicit SANDKEEP_BACKEND, read
+        # just above, still wins if both are set).
+        if "SANDKEEP_POSTURE" in os.environ and "SANDKEEP_BACKEND" not in os.environ:
+            posture = os.environ["SANDKEEP_POSTURE"]
+            if posture not in POSTURES:
+                raise ValueError(f"SANDKEEP_POSTURE must be one of {POSTURES}, got {posture!r}")
+            cfg.backend = _POSTURE_BACKEND[posture]
         cfg.e2b_template = os.environ.get("SANDKEEP_E2B_TEMPLATE", cfg.e2b_template)
         cfg.test_command = os.environ.get("SANDKEEP_TEST_COMMAND", cfg.test_command)
         if "SANDKEEP_MAX_BUDGET_USD" in os.environ:
@@ -102,7 +152,21 @@ class Config:
             cfg.task_timeout_seconds = int(os.environ["SANDKEEP_TASK_TIMEOUT"])
         if "SANDKEEP_MAX_PATCH_BYTES" in os.environ:
             cfg.max_patch_bytes = int(os.environ["SANDKEEP_MAX_PATCH_BYTES"])
+        if "SANDKEEP_DAILY_BUDGET_USD" in os.environ:
+            raw = os.environ["SANDKEEP_DAILY_BUDGET_USD"]
+            try:
+                cfg.daily_budget_usd = float(raw)
+            except ValueError:
+                raise ValueError(
+                    f"SANDKEEP_DAILY_BUDGET_USD must be a number, got {raw!r}"
+                ) from None
         return cfg
+
+    @property
+    def posture(self) -> str:
+        """The friendly containment posture label, derived from the backend so
+        it can never disagree with what actually runs (step 13)."""
+        return "microvm" if self.backend == "e2b" else "hardened-docker"
 
     @property
     def db_path(self) -> Path:

@@ -1,0 +1,30 @@
+# E2B microVM boundary verification (improvement plan, step 26).
+#
+# The E2B backend's containment claim is only meaningful if the boundary suite
+# is run against a real microVM — which needs an E2B account. This job makes
+# that reproducible by anyone with a key: it is MANUAL (workflow_dispatch) and
+# reads E2B_API_KEY from repo secrets. It is intentionally NOT part of the
+# required CI (which must stay runnable without cloud credentials).
+#
+# To use: add E2B_API_KEY (and, to build the custom template, E2B_ACCESS_TOKEN)
+# as repository secrets, then run this workflow from the Actions tab.
+name: E2B boundary (manual)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  boundary-e2b:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -e ".[dev,e2b]"
+      - name: Boundary suite against a real E2B microVM
+        env:
+          SANDKEEP_TEST_BACKEND: e2b
+          SANDKEEP_E2B_TEMPLATE: sandkeep
+          E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
+        run: python -m pytest -q tests/test_boundary.py

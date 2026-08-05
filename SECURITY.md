@@ -23,10 +23,28 @@ guarantee the host is safe from a hostile agent.
 - Your working tree and `.git` are not modified until you explicitly `accept`.
 
 **Not protected:**
-- Container escape, kernel exploits, and egress depend on Docker configuration and
-  are **not** hardened. Treat the host as reachable by a determined agent.
-- In Phase 0–1, `ANTHROPIC_API_KEY` is passed into the sandbox environment
-  (tracked as a known limitation; a host-side secret broker is planned for Phase 2).
+- Container escape and kernel exploits depend on Docker configuration. The
+  default container drops all capabilities and sets `no-new-privileges`, but
+  Docker is a shared-kernel boundary — treat the host as reachable by a
+  determined agent. Use the E2B microVM backend when you need a boundary you can
+  point to in a security review.
+- Egress: by default the sandbox has open network in `egress` mode. Run with
+  `SANDKEEP_NETWORK=proxy` to put it behind the key broker + egress allowlist —
+  then the agent never holds the API key and can only reach the allowlist.
+
+**Hardening knobs (Docker backend):**
+- `--cap-drop ALL` + `no-new-privileges` are always on.
+- `extra_run_args` is validated: boundary-breaching flags (writable mounts,
+  `--privileged`, `--cap-add`, host namespaces, network/security overrides) are
+  refused before `docker run`.
+- `SANDKEEP_SECCOMP=/path/to/profile.json` applies a custom seccomp profile
+  (empty leaves Docker's built-in default in force). Supply and verify a profile
+  against your sandbox image.
+- `SANDKEEP_READONLY_ROOTFS=on` runs with a read-only root filesystem and tmpfs
+  for the writable workspace/HOME. Verify against your image before relying on it.
+- **User-namespace remapping** is a daemon-level setting (`dockerd
+  --userns-remap`) so in-container root ≠ host root — recommended, configured on
+  the Docker daemon, not per run.
 
 ## Supported versions
 

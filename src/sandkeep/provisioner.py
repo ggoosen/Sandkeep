@@ -8,6 +8,9 @@ the host repo.
 
 from __future__ import annotations
 
+from pathlib import Path
+
+from . import policy
 from .audit import AuditLog
 from .models import Task, TaskState
 from .sandbox.base import SRC_MOUNT, SandboxHandle, SandboxProvider
@@ -22,6 +25,50 @@ def task_branch(task_id: str) -> str:
     return f"sandkeep/{task_id}"
 
 
+# Read-only ≠ unreadable: the agent can read every tracked file in /src. This
+# scans what it would expose so the human is told before a run (step 15). Cheap
+# and advisory — never blocks; the human decides.
+_SCAN_MAX_FILE_BYTES = 1_000_000
+_SCAN_MAX_FINDINGS = 50
+
+
+def scan_repo_secrets(repo_path: str | Path, *, max_findings: int = _SCAN_MAX_FINDINGS) -> list[str]:
+    """Secret-shaped content the agent would be able to read from the repo.
+    Returns 'path: label' strings (capped). Skips .git, large, and binary
+    files. Best-effort — unreadable files are ignored."""
+    root = Path(repo_path)
+    findings: list[str] = []
+    for path in sorted(root.rglob("*")):
+        if len(findings) >= max_findings:
+            break
+        if not path.is_file() or ".git" in path.parts:
+            continue
+        try:
+            if path.stat().st_size > _SCAN_MAX_FILE_BYTES:
+                continue
+            raw = path.read_bytes()
+        except OSError:
+            continue
+        if b"\x00" in raw:  # binary
+            continue
+        for label in policy.find_secrets_in_text(raw.decode("utf-8", "replace")):
+            findings.append(f"{path.relative_to(root)}: {label}")
+            if len(findings) >= max_findings:
+                break
+    return findings
+
+
+def build_clone_step(src_mount: str, workdir: str, *, shallow: bool) -> list[str]:
+    """The git clone argv (step 15). A shallow clone limits the deep history the
+    *clone* carries — using a file:// URL because git ignores --depth for plain
+    local-path clones. (Note: /src itself stays fully readable; a truly
+    history-stripped /src is a deeper follow-up.)"""
+    if shallow:
+        return ["git", "clone", "--depth=1", "--no-hardlinks",
+                f"file://{src_mount}", workdir]
+    return ["git", "clone", "--no-hardlinks", src_mount, workdir]
+
+
 def provision(
     task: Task,
     provider: SandboxProvider,
@@ -31,10 +78,19 @@ def provision(
     *,
     trace_id: str,
     exec_timeout: int = 120,
+    shallow: bool = True,
+    scan_secrets: bool = True,
 ) -> SandboxHandle:
     """Provision a sandbox for `task`. Transitions NEW → PROVISIONING up
     front so any failure can legally move on to FAILED."""
     store.update_state(task.id, TaskState.PROVISIONING, trace_id, "sandbox create + clone")
+    if scan_secrets:
+        exposed = scan_repo_secrets(task.repo_path)
+        if exposed:
+            audit.log(
+                "repo_secret_exposure", trace_id=trace_id, task_id=task.id,
+                count=len(exposed), findings=exposed[:20],
+            )
     handle = provider.create(task.repo_path, env)
     store.update_fields(task.id, sandbox_id=handle.id)
     audit.log("sandbox_created", trace_id=trace_id, task_id=task.id, sandbox_id=handle.id)
@@ -42,7 +98,7 @@ def provision(
     # the sandbox we just created, then re-raise for the caller to handle.
     try:
         return _provision_clone(task, provider, handle, audit, trace_id=trace_id,
-                                exec_timeout=exec_timeout, store=store)
+                                exec_timeout=exec_timeout, store=store, shallow=shallow)
     except BaseException:
         try:
             provider.destroy(handle)
@@ -60,6 +116,7 @@ def _provision_clone(
     trace_id: str,
     exec_timeout: int,
     store: StateStore,
+    shallow: bool = True,
 ) -> SandboxHandle:
     branch = task_branch(task.id)
     steps: list[list[str]] = [
@@ -70,9 +127,10 @@ def _provision_clone(
         ["git", "config", "--global", "--add", "safe.directory", SRC_MOUNT],
         ["git", "config", "--global", "--add", "safe.directory", f"{SRC_MOUNT}/.git"],
         # the independent clone: its own writable .git, host .git untouched.
+        # shallow by default (step 15) so the clone carries no deep history.
         # submodules are not initialised, LFS is absent from the image —
         # TODO(phase-2): opt-in submodule/LFS support
-        ["git", "clone", "--no-hardlinks", SRC_MOUNT, handle.workdir],
+        build_clone_step(SRC_MOUNT, handle.workdir, shallow=shallow),
         ["git", "-C", handle.workdir, "checkout", "-b", branch, task.base_ref],
         # drop the origin remote so nothing inside references /src again
         ["git", "-C", handle.workdir, "remote", "remove", "origin"],

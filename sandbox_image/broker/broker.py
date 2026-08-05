@@ -60,25 +60,46 @@ def host_allowed(host: str, allowlist: set[str]) -> bool:
     return False
 
 
-def injected_headers(headers: dict[str, str], api_key: str) -> dict[str, str]:
-    """Copy request headers for the upstream Anthropic call, injecting auth the
-    sandbox never had. Drops any client-supplied auth/host so the agent can't
-    override or spoof them, and ensures the API version is present."""
+def injected_headers(headers: dict[str, str], *, auth_header: str,
+                     auth_scheme: str, key: str) -> dict[str, str]:
+    """Copy request headers for the upstream call, injecting the auth the
+    sandbox never had (per-route: Anthropic uses `x-api-key`, OpenAI uses
+    `Authorization: Bearer …`). Drops any client-supplied auth/host so the agent
+    can't override or spoof them, and keeps anthropic-version present."""
     drop = {"x-api-key", "authorization", "host", "content-length", "connection",
-            "proxy-connection", "anthropic-version"}
+            "proxy-connection", auth_header.lower()}
     out = {k: v for k, v in headers.items() if k.lower() not in drop}
-    out["x-api-key"] = api_key
-    out["anthropic-version"] = headers.get("anthropic-version", "2023-06-01")
+    out[auth_header] = f"{auth_scheme}{key}" if auth_scheme else key
+    if auth_header.lower() == "x-api-key":  # Anthropic requires a version header
+        out.setdefault("anthropic-version", headers.get("anthropic-version", "2023-06-01"))
     return out
+
+
+def match_route(path: str, routes: list[dict]) -> dict | None:
+    """The route whose prefix the request path falls under, if any."""
+    for route in routes:
+        prefix = route["prefix"]
+        if path == prefix or path.startswith(prefix + "/"):
+            return route
+    return None
+
+
+def method_allowed(method: str, route: dict) -> bool:
+    """A route may restrict which HTTP methods it forwards (host+method rule,
+    improvement plan step 14). No `methods` list → all methods allowed."""
+    methods = route.get("methods")
+    if not methods:
+        return True
+    return method.upper() in {m.upper() for m in methods}
 
 
 class BrokerHandler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
     # -- config injected by the server ------------------------------------
-    allowlist: set[str] = set(DEFAULT_ALLOWLIST)
-    api_key: str = ""
-    upstream: str = "https://api.anthropic.com"
+    allowlist: set[str] = set(DEFAULT_ALLOWLIST)  # CONNECT (opaque TLS) hosts
+    routes: list[dict] = []                        # reverse-proxied upstreams
+    max_req_bytes: int = 10 * 1024 * 1024          # cap on a forwarded body
     log_path: str = "/var/log/sandkeep-broker.log"
 
     def log_message(self, *args):  # silence the default apache-style logging
@@ -134,13 +155,18 @@ class BrokerHandler(BaseHTTPRequestHandler):
         finally:
             b.close()
 
-    # -- Anthropic reverse proxy (inject the key) -------------------------
+    # -- reverse proxy: match a route, inject its key ---------------------
     def _handle(self):
-        if self.path.startswith(ANTHROPIC_PREFIX + "/") or self.path == ANTHROPIC_PREFIX:
-            return self._proxy_anthropic()
-        # A plain (non-CONNECT) request that isn't the Anthropic path: deny.
-        self._emit("deny", "-", "non-anthropic plaintext request")
-        self.send_error(403, "only the Anthropic API is reverse-proxied")
+        route = match_route(self.path, self.routes)
+        if route is None:
+            self._emit("deny", "-", "no reverse-proxy route for path")
+            self.send_error(403, "no route for this path on the sandkeep broker")
+            return
+        if not method_allowed(self.command, route):
+            self._emit("deny", route["upstream"], f"method {self.command} not allowed on route")
+            self.send_error(405, "method not allowed on this route")
+            return
+        return self._proxy_route(route)
 
     do_GET = _handle
     do_POST = _handle
@@ -148,17 +174,26 @@ class BrokerHandler(BaseHTTPRequestHandler):
     do_DELETE = _handle
     do_PATCH = _handle
 
-    def _proxy_anthropic(self):
-        if not self.api_key:
-            self._emit("deny", "api.anthropic.com", "broker has no api key")
-            self.send_error(502, "broker misconfigured: no API key")
+    def _proxy_route(self, route: dict):
+        if not route.get("key"):
+            self._emit("deny", route["upstream"], "broker has no key for route")
+            self.send_error(502, "broker misconfigured: no key for route")
             return
         length = int(self.headers.get("Content-Length", 0) or 0)
+        if length > self.max_req_bytes:
+            # bound exfil-via-request-body; a normal API call is far smaller
+            self._emit("violation", route["upstream"],
+                       f"request body {length} exceeds cap {self.max_req_bytes}")
+            self.send_error(413, "request body exceeds sandkeep broker cap")
+            return
         body = self.rfile.read(length) if length else None
-        sub = self.path[len(ANTHROPIC_PREFIX):] or "/"
-        url = self.upstream.rstrip("/") + sub
-        headers = injected_headers(dict(self.headers), self.api_key)
-        self._emit("allow", "api.anthropic.com", f"proxy {sub}")
+        sub = self.path[len(route["prefix"]):] or "/"
+        url = route["upstream"].rstrip("/") + sub
+        headers = injected_headers(
+            dict(self.headers), auth_header=route["auth_header"],
+            auth_scheme=route.get("auth_scheme", ""), key=route["key"],
+        )
+        self._emit("allow", route["upstream"], f"proxy {self.command} {sub}")
         req = urllib.request.Request(url, data=body, headers=headers, method=self.command)
         try:
             with urllib.request.urlopen(req, timeout=600) as resp:
@@ -181,14 +216,45 @@ class BrokerHandler(BaseHTTPRequestHandler):
             self.send_error(502, f"upstream error: {exc}")
 
 
+def load_routes() -> list[dict]:
+    """Reverse-proxy routes from env. SANDKEEP_ROUTES is a JSON list of
+    {prefix, upstream, auth_header, auth_scheme?, key_env, methods?}; each key
+    is read from the broker's OWN environment by key_env (never on the argv).
+    Falls back to the single Anthropic route from ANTHROPIC_API_KEY so existing
+    deployments keep working."""
+    raw = os.environ.get("SANDKEEP_ROUTES", "")
+    if raw:
+        specs = json.loads(raw)
+    else:
+        specs = [{
+            "prefix": ANTHROPIC_PREFIX,
+            "upstream": os.environ.get("ANTHROPIC_UPSTREAM", "https://api.anthropic.com"),
+            "auth_header": "x-api-key", "auth_scheme": "",
+            "key_env": "ANTHROPIC_API_KEY",
+        }]
+    routes = []
+    for s in specs:
+        routes.append({
+            "prefix": s["prefix"],
+            "upstream": s["upstream"],
+            "auth_header": s.get("auth_header", "x-api-key"),
+            "auth_scheme": s.get("auth_scheme", ""),
+            "methods": s.get("methods"),
+            "key": os.environ.get(s.get("key_env", ""), ""),
+        })
+    return routes
+
+
 def build_server(port: int | None = None) -> ThreadingHTTPServer:
     allowlist = os.environ.get("SANDKEEP_ALLOWLIST", "")
     BrokerHandler.allowlist = (
         {h.strip() for h in allowlist.split(",") if h.strip()}
         if allowlist else set(DEFAULT_ALLOWLIST)
     )
-    BrokerHandler.api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-    BrokerHandler.upstream = os.environ.get("ANTHROPIC_UPSTREAM", "https://api.anthropic.com")
+    BrokerHandler.routes = load_routes()
+    BrokerHandler.max_req_bytes = int(
+        os.environ.get("SANDKEEP_MAX_REQ_BYTES", str(10 * 1024 * 1024))
+    )
     BrokerHandler.log_path = os.environ.get("LOG_PATH", "/var/log/sandkeep-broker.log")
     port = port if port is not None else int(os.environ.get("PORT", "8080"))
     return ThreadingHTTPServer(("0.0.0.0", port), BrokerHandler)
@@ -197,6 +263,7 @@ def build_server(port: int | None = None) -> ThreadingHTTPServer:
 if __name__ == "__main__":
     server = build_server()
     print(json.dumps({"action": "start", "port": server.server_address[1],
+                      "routes": [r["prefix"] for r in BrokerHandler.routes],
                       "allowlist": sorted(BrokerHandler.allowlist)}),
           file=sys.stderr, flush=True)
     server.serve_forever()

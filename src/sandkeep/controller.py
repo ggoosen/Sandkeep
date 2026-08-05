@@ -21,7 +21,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from . import agent_runner, diff, policy, results, skills
+from . import agent_runner, artifacts, diff, policy, results, skills
 from .agent import get_driver
 from .audit import AuditLog, new_trace_id
 from .config import Config, resource_path
@@ -57,6 +57,7 @@ def run_concurrent(
     specs: list[dict],
     *,
     max_workers: int = 4,
+    total_budget_usd: float | None = None,
 ) -> list:
     """Run many tasks in parallel (BUILD_SPEC §12), one sandbox each, on a
     shared Controller. Safe because the StateStore and AuditLog are
@@ -64,16 +65,36 @@ def run_concurrent(
     parallelism is the per-task sandboxes/agent runs, not the (microsecond) DB
     writes. ``specs`` are run_task kwargs.
 
+    With ``total_budget_usd`` set, tasks are dispatched in order only while the
+    COMMITTED spend (sum of per-run budgets) stays under the cap; the rest are
+    not dispatched and come back as a ControllerError so the caller can report
+    them (improvement plan, step 18). In-flight tasks always finish.
+
     Returns results in submission order: a Task on completion, or the raised
     Exception for a host-side failure (so one bad task can't sink the batch).
     """
     results: list = [None] * len(specs)
+    default_budget = controller.config.max_budget_usd
+
+    to_run: list[tuple[int, dict]] = []
+    committed = 0.0
+    for i, spec in enumerate(specs):
+        b = spec.get("max_budget_usd")
+        b = b if b is not None else default_budget
+        if total_budget_usd is not None and committed + b > total_budget_usd:
+            results[i] = ControllerError(
+                f"skipped: batch budget ${total_budget_usd:.2f} reached "
+                f"(${committed:.2f} already committed)"
+            )
+            continue
+        committed += b
+        to_run.append((i, spec))
 
     def worker(spec: dict):
         return controller.run_task(**spec)
 
     with ThreadPoolExecutor(max_workers=max(1, max_workers)) as pool:
-        futures = {pool.submit(worker, spec): i for i, spec in enumerate(specs)}
+        futures = {pool.submit(worker, spec): i for i, spec in to_run}
         for future, i in futures.items():
             try:
                 results[i] = future.result()
@@ -93,6 +114,7 @@ class Controller:
         network_denied: bool = False,
         network: str = "egress",
         browser: bool = False,
+        pr_gate=None,
     ) -> None:
         self.config = config
         self.store = store
@@ -101,6 +123,9 @@ class Controller:
         self.network = network
         self.network_denied = network_denied
         self.browser = browser
+        # draft-PR gate (step 16); injectable for tests. Built lazily from
+        # config/env on first use when the gate mode calls for it.
+        self.pr_gate = pr_gate
 
     # -- the single-task loop (Phase 1) -----------------------------------
 
@@ -122,6 +147,10 @@ class Controller:
         # Resolve the driver BEFORE creating any state or sandbox: an unknown
         # agent is host-side misconfiguration and must fail loud (BUILD_SPEC §13).
         driver = get_driver(agent or self.config.agent)
+        this_budget = (
+            max_budget_usd if max_budget_usd is not None else self.config.max_budget_usd
+        )
+        self._enforce_daily_budget(this_budget)
         task = Task(
             id=uuid.uuid4().hex,
             repo_path=str(Path(repo_path).resolve()),
@@ -142,6 +171,8 @@ class Controller:
             handle = provision(
                 task, self.provider, self.store, self.audit, self._agent_env(driver),
                 trace_id=new_trace_id(), exec_timeout=self.config.exec_timeout_seconds,
+                shallow=not self.config.full_history,
+                scan_secrets=self.config.scan_repo_secrets,
             )
         except (ProvisioningError, SandboxError) as exc:
             self._fail(task, handle, f"provisioning failed: {exc}")
@@ -159,6 +190,23 @@ class Controller:
             # CLI can report it.
             self._fail_if_running(task, handle, f"run aborted: {exc!r}")
             raise
+
+    def _enforce_daily_budget(self, this_budget: float) -> None:
+        """Refuse a run that would push the last-24h committed spend over the
+        configured daily cap (step 18) — fail loud, before provisioning."""
+        cap = self.config.daily_budget_usd
+        if cap is None:
+            return
+        from datetime import datetime, timedelta, timezone
+
+        since = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+        committed = self.store.committed_budget_since(since)
+        if committed + this_budget > cap:
+            raise ControllerError(
+                f"daily budget ${cap:.2f} would be exceeded: ${committed:.2f} "
+                f"committed in the last 24h + ${this_budget:.2f} this run. "
+                "Raise SANDKEEP_DAILY_BUDGET_USD or wait for the window to roll."
+            )
 
     def _fail_if_running(self, task: Task, handle: SandboxHandle | None, detail: str) -> None:
         current = self.store.get_task(task.id).state
@@ -248,6 +296,42 @@ class Controller:
             )
         return self.store.get_task(task.id)
 
+    def revise(self, task_id: str, instruction: str, *,
+               max_budget_usd: float | None = None) -> Task:
+        """Iterate a task at REVIEW: re-dispatch the agent into its still-alive
+        sandbox with a follow-up instruction, against the clone that already
+        holds the prior changes, and land back at REVIEW with an updated diff
+        (improvement plan, step 17). No new sandbox; a REVIEW → RUNNING
+        transition is recorded per revision."""
+        task = self.store.get_task(task_id)
+        if task.state is not TaskState.REVIEW:
+            raise ControllerError(f"task is {task.state.value}, not review")
+        if not task.sandbox_id:
+            raise ControllerError("no live sandbox for task (already torn down?)")
+        driver = get_driver(task.agent)
+        handle = SandboxHandle(id=task.sandbox_id, workdir="/work/repo")
+        # the follow-up drives this dispatch; the DB keeps the original
+        # instruction for the record, revisions show in the transition chain.
+        task.instruction = instruction
+        if max_budget_usd is not None:
+            task.max_budget_usd = max_budget_usd
+        self.store.update_state(
+            task.id, TaskState.RUNNING, new_trace_id(), f"revision dispatched: {instruction}"
+        )
+        started = time.monotonic()
+        try:
+            return self._drive_run(task, handle, driver, started)
+        except BaseException as exc:  # noqa: BLE001 — same crash guard as run_task
+            self._fail_if_running(task, handle, f"revision aborted: {exc!r}")
+            raise
+
+    def revision_count(self, task: Task) -> int:
+        """How many times a task has been revised (REVIEW → RUNNING hops)."""
+        return sum(
+            1 for r in self.store.get_transitions(task.id)
+            if r["from_state"] == "review" and r["to_state"] == "running"
+        )
+
     # -- the interactive session (Phase 1, `sandkeep shell`) --------------
 
     def run_interactive(
@@ -281,6 +365,8 @@ class Controller:
             handle = provision(
                 task, self.provider, self.store, self.audit, self._agent_env(driver),
                 trace_id=new_trace_id(), exec_timeout=self.config.exec_timeout_seconds,
+                shallow=not self.config.full_history,
+                scan_secrets=self.config.scan_repo_secrets,
             )
         except (ProvisioningError, SandboxError) as exc:
             self._fail(task, handle, f"provisioning failed: {exc}")
@@ -337,8 +423,10 @@ class Controller:
                 "http_proxy": self.BROKER_URL,
                 "https_proxy": self.BROKER_URL,
             }
-            if driver.base_url_env:
-                env[driver.base_url_env] = self.BROKER_URL + "/anthropic"
+            # Point the agent's base URL at this driver's broker route (step 14),
+            # so the broker injects the right key for the right upstream.
+            if driver.base_url_env and driver.broker_route:
+                env[driver.base_url_env] = self.BROKER_URL + driver.broker_route["prefix"]
         else:
             env = {}
             secret = os.environ.get(driver.secret_env, "")
@@ -463,6 +551,30 @@ class Controller:
                 names=[s.name for s in authored],
             )
 
+        # Step 24: capture agent-produced artifacts (screenshots, reports) —
+        # excluded from the patch, type/size-gated, surfaced at the gate.
+        try:
+            found = artifacts.read_artifacts(
+                self.provider, handle, timeout=self.config.exec_timeout_seconds,
+                max_bytes=self.config.max_artifact_bytes,
+            )
+        except Exception as exc:  # noqa: BLE001 — artifacts are best-effort metadata
+            found = []
+            self.audit.log(
+                "artifact_read_failed", trace_id=new_trace_id(), task_id=task.id,
+                error=str(exc),
+            )
+        if found:
+            accepted = artifacts.save_artifacts(
+                found, self.config.outputs_dir / f"{task.id}.artifacts"
+            )
+            self.audit.log(
+                "artifacts_captured", trace_id=new_trace_id(), task_id=task.id,
+                accepted=[a.name for a in accepted],
+                rejected=[{"name": a.name, "reason": a.skipped_reason}
+                          for a in found if a.skipped_reason],
+            )
+
         # One transaction for SUCCEEDED → REVIEW so a crash can't strand the
         # task on SUCCEEDED (from which no CLI command can recover it).
         self.store.advance(
@@ -539,6 +651,14 @@ class Controller:
             names=[s.name for s in stored],
         )
 
+    def captured_artifacts(self, task: Task) -> list[str]:
+        """Names of artifacts captured for a task (from the host sidecar), for
+        the gate to show. Empty if none."""
+        sidecar = self.config.outputs_dir / f"{task.id}.artifacts"
+        if not sidecar.is_dir():
+            return []
+        return sorted(p.name for p in sidecar.iterdir() if p.is_file())
+
     def authored_skills(self, task: Task) -> list[skills.Skill]:
         """Skills a task authored, from the host sidecar captured at land time
         (empty if none)."""
@@ -588,9 +708,11 @@ class Controller:
             task.repo_path, task.base_ref, branch, Path(task.patch_path),
             f"sandkeep: {task.instruction}\n\nTask: {task.id}",
         )
-        self.store.update_state(
-            task.id, TaskState.MERGED, new_trace_id(), f"applied to {branch} @ {sha}"
-        )
+        detail = f"applied to {branch} @ {sha}"
+        if self.config.gate == "draft-pr":
+            pr = self._open_draft_pr(task, branch)
+            detail += f"; draft PR {pr.url or f'#{pr.number}'}"
+        self.store.update_state(task.id, TaskState.MERGED, new_trace_id(), detail)
         # Phase 4: register the skills this task authored, scoped to the repo,
         # so future runs against it inherit the learned capabilities.
         authored = self.authored_skills(task)
@@ -602,6 +724,45 @@ class Controller:
             )
         self._destroy_quietly(task)
         return sha
+
+    def _open_draft_pr(self, task: Task, branch: str):
+        """Push the accepted branch and open a draft PR (step 16). Uses the
+        injected gate if present, else builds one from config/env. Raises
+        ControllerError (not a raw PRGateError) so the CLI reports it cleanly."""
+        from . import gate as gate_mod
+
+        gw = self.pr_gate
+        if gw is None:
+            gw = gate_mod.DraftPRGate(
+                remote=self.config.git_remote, base=self.config.pr_base,
+                token=os.environ.get("GITHUB_TOKEN", ""),
+            )
+        contract = {}
+        rp = self.config.outputs_dir / f"{task.id}.results.json"
+        if rp.exists():
+            try:
+                contract = json.loads(rp.read_text())
+            except (json.JSONDecodeError, OSError):
+                contract = {}
+        body = gate_mod.build_pr_body(
+            instruction=task.instruction,
+            summary=contract.get("summary", ""),
+            files=self._claimed_files(task),
+            risk_flags=self.risk_flags(task),
+            task_id=task.id,
+        )
+        try:
+            pr = gw.open(
+                repo_path=task.repo_path, branch=branch,
+                title=f"sandkeep: {task.instruction}"[:72], body=body,
+            )
+        except gate_mod.PRGateError as exc:
+            raise ControllerError(f"draft-PR gate failed: {exc}") from None
+        self.audit.log(
+            "draft_pr_opened", trace_id=new_trace_id(), task_id=task.id,
+            branch=branch, url=pr.url, number=pr.number,
+        )
+        return pr
 
     def reject(self, task_id: str) -> None:
         task = self.store.get_task(task_id)

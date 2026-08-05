@@ -62,6 +62,12 @@ class AgentDriver(ABC):
     #: the sandbox never holds the credential. "" = no reverse-proxy support
     #: (the agent still gets HTTPS_PROXY for allowlisted egress).
     base_url_env: str = ""
+    #: reverse-proxy route the broker should serve for this agent so it runs
+    #: key-broker-protected in proxy mode (improvement plan, step 14). None =
+    #: the agent isn't broker-routable yet (proxy mode falls back to holding its
+    #: own key). Shape: {prefix, upstream, auth_header, auth_scheme, key_env,
+    #: methods?}. The broker reads the key from its OWN env by key_env.
+    broker_route: dict | None = None
 
     @abstractmethod
     def install_steps(self) -> list[str]:

@@ -36,7 +36,9 @@ ALLOWED_TRANSITIONS: dict[TaskState, frozenset[TaskState]] = {
         {TaskState.SUCCEEDED, TaskState.FAILED, TaskState.TIMEOUT, TaskState.VIOLATION}
     ),
     TaskState.SUCCEEDED: frozenset({TaskState.REVIEW, TaskState.FAILED}),
-    TaskState.REVIEW: frozenset({TaskState.MERGED, TaskState.REJECTED}),
+    # REVIEW → RUNNING: `sandkeep revise` re-dispatches the agent into the
+    # still-alive sandbox to iterate the diff (improvement plan, step 17).
+    TaskState.REVIEW: frozenset({TaskState.MERGED, TaskState.REJECTED, TaskState.RUNNING}),
     TaskState.FAILED: frozenset({TaskState.ROLLED_BACK}),
     TaskState.TIMEOUT: frozenset({TaskState.ROLLED_BACK}),
     TaskState.VIOLATION: frozenset({TaskState.ROLLED_BACK}),

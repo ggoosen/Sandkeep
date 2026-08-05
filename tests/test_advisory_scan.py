@@ -65,7 +65,7 @@ def wiring(tmp_path):
 def _fake_provision(monkeypatch):
     import sandkeep.controller as ctrl
 
-    def fake(task, prov, store, audit, env, *, trace_id, exec_timeout):
+    def fake(task, prov, store, audit, env, *, trace_id, exec_timeout, **kw):
         handle = prov.create(task.repo_path, env)
         store.update_fields(task.id, sandbox_id=handle.id, base_ref="HEAD")
         store.update_state(task.id, TaskState.PROVISIONING, trace_id, "prov")
